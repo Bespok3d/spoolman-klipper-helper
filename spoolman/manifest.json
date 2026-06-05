@@ -1,0 +1,182 @@
+{
+  "name": "spoolman",
+  "title": "Spoolman Bridge",
+  "version": "0.1.5",
+  "min_daemon_version": "0.10.1-dev",
+  "description": "Reads rfid_data.json at startup and on every card change, syncs the active spool to your Spoolman server. Length used per print is logged automatically.",
+  "tagline": "Zero-config Spoolman: active spool always tracked.",
+  "category": "filament",
+  "channel": "stable",
+  "printer_specific": false,
+  "source": "https://github.com/bespok3d-org/plugin-spoolman",
+  "homepage": "https://github.com/bespok3d-org/plugin-spoolman",
+  "changelog": "doc/CHANGELOG.md",
+  "published_at": "2025-09-20",
+  "updated_at": "2026-05-31",
+  "publisher": "PLACEHOLDER",
+  "provides": [
+    {
+      "service": "spoolman-service"
+    }
+  ],
+  "require": [
+    {
+      "service": "rfid-service",
+      "cardinality": "one"
+    }
+  ],
+  "conflicts": [],
+  "macros": [
+    {
+      "name": "SET_ACTIVE_SPOOL",
+      "params": "TOOL={0..3}",
+      "description": "Set the selected tool as the active spool."
+    },
+    {
+      "name": "CLEAR_ACTIVE_SPOOL",
+      "description": "Clear the current active spool."
+    },
+    {
+      "name": "CLEAR_ALL_SPOOLS",
+      "description": "Clear the selected spool for every tool."
+    },
+    {
+      "name": "DETECT_SPOOLS",
+      "description": "Re-detect the loaded spools. A handy reset when spool state looks wrong."
+    },
+    {
+      "name": "DUMP_SPOOLS",
+      "description": "Print what the bridge knows about the loaded spools."
+    },
+    {
+      "name": "READ_FILAMENT_ID",
+      "params": "TOOL={0..3}",
+      "description": "Read the selected lane's spool tag, if any."
+    },
+    {
+      "name": "GET_FILAMENT_ID",
+      "params": "TOOL={0..3}",
+      "description": "Print the currently read tag for the selected lane."
+    },
+    {
+      "name": "SH_CONFIG",
+      "params": "MODE=<auto|manual> LOGS=<level>",
+      "description": "Change mode and logging at runtime, no restart."
+    },
+    {
+      "name": "SH_DEBUG",
+      "params": "[SKU=<sku>]",
+      "description": "Print the current configuration; with a SKU, show the spool it would track."
+    }
+  ],
+  "requires": {
+    "capabilities": [
+      "klipper-generic"
+    ],
+    "variables": [
+      {
+        "name": "SPOOLMAN_SERVER",
+        "description": "Spoolman server address with port, e.g. 192.168.1.50:8000",
+        "required": true
+      },
+      {
+        "name": "SPOOLMAN_MODE",
+        "description": "How the active spool is chosen: auto (RFID first) or manual.",
+        "required": false,
+        "default": "auto"
+      },
+      {
+        "name": "SPOOLMAN_LOGGING",
+        "description": "Log verbosity: error, info, warn, verbose, or debug.",
+        "required": false,
+        "default": "info"
+      }
+    ]
+  },
+  "config": [
+    {
+      "key": "SPOOLMAN_SERVER",
+      "label": "Spoolman server address",
+      "type": "text",
+      "placeholder": "192.168.1.50:8000",
+      "hint": "Host or host:port of your Spoolman instance.",
+      "required": true,
+      "userEditable": true
+    },
+    {
+      "key": "SPOOLMAN_MODE",
+      "label": "Selection mode",
+      "type": "select",
+      "options": [
+        "auto",
+        "manual"
+      ],
+      "default": "auto",
+      "hint": "auto: RFID is the source of truth, falls back to the manual spool. manual: the manual selection drives, tags are the fallback.",
+      "userEditable": true
+    },
+    {
+      "key": "SPOOLMAN_LOGGING",
+      "label": "Log level",
+      "type": "select",
+      "options": [
+        "error",
+        "info",
+        "warn",
+        "verbose",
+        "debug"
+      ],
+      "default": "info",
+      "hint": "How chatty the logs are, from least to most.",
+      "userEditable": true
+    }
+  ],
+  "permissions": [
+    "klipper-extra",
+    "moonraker-component",
+    "klipper-config",
+    "moonraker-config",
+    "restart"
+  ],
+  "install": {
+    "data": [
+      "spoolman"
+    ],
+    "place": [
+      {
+        "class": "klipper-extra",
+        "src": "files/klipper/klippy/extras/spoolman_helper.py"
+      },
+      {
+        "class": "klipper-extra",
+        "src": "files/klipper/klippy/extras/spoolman"
+      },
+      {
+        "class": "moonraker-component",
+        "src": "files/moonraker/spoolman_proxy.py"
+      },
+      {
+        "class": "klipper-config",
+        "src": "files/cfg/klipper/spoolman.cfg.tmpl",
+        "name": "spoolman.cfg",
+        "render": true
+      },
+      {
+        "class": "moonraker-config",
+        "src": "files/cfg/moonraker/spoolman.cfg.tmpl",
+        "name": "spoolman.cfg",
+        "render": true
+      },
+      {
+        "class": "klipper-config",
+        "src": "files/cfg/klipper/spoolman_support_macros"
+      }
+    ],
+    "restart": [
+      "moonraker",
+      "klipper"
+    ]
+  },
+  "conflict_resolutions": [],
+  "files": []
+}

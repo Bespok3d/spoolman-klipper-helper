@@ -1,0 +1,4 @@
+--- a/moonraker.conf
++++ b/moonraker.conf
+@@ -1,3 +1,4 @@
++[include bespok3d/spoolman.cfg]
