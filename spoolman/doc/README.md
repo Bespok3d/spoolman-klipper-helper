@@ -11,6 +11,8 @@ to Klipper or Moonraker.
   spool active when a tool is picked.
 - Handles the U1's 32 virtual-tool system for jobs that need more than 4 filaments.
 - Logs filament length used per print automatically.
+- Propagates a manually picked spool's color and material to the printer screen and the AFC
+  panel for untagged lanes (see the scenario table below).
 
 ## What it does not do
 
@@ -56,6 +58,47 @@ Find the Spoolman panel and make sure it is enabled. Its position depends on how
 arranged your dashboard, so look around for it.
 
 ![Spoolman panel in Fluidd](images/spoolman.png)
+
+## How filament data flows (scenarios and gotchas)
+
+Two different pieces of data take two different paths, and knowing which is which explains
+every behavior below.
+
+- **Name** always comes from Spoolman, resolved live from the lane/tool's `spool_id`. It shows
+  the instant a spool is picked, with no help from the print task.
+- **Color, material, and vendor** always come from the firmware's print task (per physical
+  extruder). Both the AFC panel and the touchscreen read them from there. A passive Moonraker
+  observer is the only thing that writes a Spoolman pick back into the print task, using the
+  firmware's own `SET_PRINT_FILAMENT_CONFIG` command (no patches, persisted like a screen edit).
+
+### Scenarios
+
+Each line is: **what you have** then how the name behaves, then how color/material behave.
+
+- **No tags, no Spoolman:** no name; color/material are whatever the print task already holds
+  (screen-set or default).
+- **RFID-tagged spool:** name from the tag's spool; color/material written by the firmware from
+  the tag. The bridge never touches a tagged lane.
+- **Untagged, set on the screen:** no name (there is no spool); color/material come from the screen.
+- **Untagged, picked in Spoolman:** name shows live from the pick; the bridge writes color/material
+  so the screen and AFC agree.
+- **Untagged, picked mid-print:** name shows live; color/material are applied when the print ends.
+- **Spool cleared for a tool:** name clears; color/material are left as-is (the bridge does not
+  wipe the print task).
+- **Spoolman server unreachable:** name stays last-known; color/material unchanged; the bridge
+  logs and moves on.
+
+### Gotchas
+
+- The bridge only ever writes **untagged** lanes, and without `FORCE`, so it can never override
+  an RFID tag. The tag is always the source of truth.
+- It acts only on the 4 physical lanes (the tools that map to physical extruders 0 to 3 in the
+  U1's virtual-tool table). A virtual tool with no physical mapping is skipped.
+- A spool picked while a print is running or paused is **deferred**: the name updates live, and
+  the color/material land the moment the print leaves printing/paused. This is deliberate, since
+  the firmware can reject the untagged write mid-print.
+- After installing or updating, Moonraker restarts and the AFC frontends' service worker may
+  serve stale JavaScript. If a panel looks wrong, hard-refresh the browser.
 
 ## Macros and commands
 

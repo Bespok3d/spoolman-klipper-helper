@@ -1,5 +1,6 @@
 import json
 
+from .spoolman.afc import push_spool_to_afc
 from .spoolman.commands import Commands
 from .spoolman.logs import Logs
 from .spoolman.macros import Macros
@@ -111,6 +112,9 @@ class SpoolmanHelper:
         except Exception:
             return {}
 
+    def _push_spool_to_afc(self, channel, spool_id):
+        push_spool_to_afc(self.printer, channel, spool_id, EXTRUDERS_COUNT)
+
     def set_spool_for_channel(self, channel, filament_info):
         self.logs.verbose(f"Received spool for extruder {channel}")
         if not (0 <= channel < EXTRUDERS_COUNT):
@@ -126,6 +130,7 @@ class SpoolmanHelper:
             return
         tool = f"T{channel}"
         self.macros.set_spool_id_for_tool(tool, None)
+        self._push_spool_to_afc(channel, None)
         holder = self.spool_holders[channel]
         if holder is not None:
             spool_id = holder.get("SPOOL_ID")
@@ -141,6 +146,14 @@ class SpoolmanHelper:
             return macro_spool or mapped_spool
         else:
             return mapped_spool if mapped_spool and "SPOOL_ID" in mapped_spool else macro_spool
+
+    def _bind_resolved_spool(self, extruder, spool, spool_id):
+        self.spools_by_id[spool_id] = spool
+        self.logs.verbose(f"Got spool_id: {spool_id}")
+        tool = f"T{extruder}"
+        self.logs.log(f"Tool {tool} is using: {filament_info_to_string(spool, self.logging)}")
+        self.macros.set_spool_id_for_tool(tool, spool_id)
+        self._push_spool_to_afc(extruder, spool_id)
 
     def apply_spool_for_extruder(self, extruder):
         self.logs.verbose(f"Trying to bind spool to extruder {extruder}")
@@ -169,11 +182,7 @@ class SpoolmanHelper:
                 )
                 return
 
-            self.spools_by_id[spool_id] = spool
-            self.logs.verbose(f"Got spool_id: {spool_id}")
-            tool = f"T{extruder}"
-            self.logs.log(f"Tool {tool} is using: {filament_info_to_string(spool, self.logging)}")
-            self.macros.set_spool_id_for_tool(tool, spool_id)
+            self._bind_resolved_spool(extruder, spool, spool_id)
 
         self.spoolman.resolve_spool(spool, on_resolve_spool)
 
@@ -211,15 +220,23 @@ class SpoolmanHelper:
         self.spoolman.set_active_spool(spool["SPOOL_ID"])
 
     def sync_spools_tools(self):
-        if self.mode == 'manual':
-            for tool_id in range(MAX_TOOLS_COUNT):
-                spool_id = self.macros.get_spool_id_for_tool(tool_id)
-                if spool_id:
-                    def on_spool(spool, sid=spool_id):
-                        self.spools_by_id[sid] = spool
-                    self.spoolman.resolve_spool({"SPOOL_ID": spool_id}, on_spool)
-        else:
+        if self.mode != 'manual':
             self.u1_tools.update_map()
+            return
+        for tool_id in range(MAX_TOOLS_COUNT):
+            self._sync_manual_tool(tool_id)
+
+    def _sync_manual_tool(self, tool_id):
+        spool_id = self.macros.get_spool_id_for_tool(tool_id)
+        if not spool_id:
+            return
+
+        def on_spool(spool, sid=spool_id):
+            self.spools_by_id[sid] = spool
+        self.spoolman.resolve_spool({"SPOOL_ID": spool_id}, on_spool)
+        extruder = self.u1_tools.extruder_for_tool(tool_id)
+        if extruder is not None:
+            self._push_spool_to_afc(extruder, spool_id)
 
     def detect_spools(self):
         spools = self.u1_tools.get_spools_config()
