@@ -1,7 +1,7 @@
 {
   "name": "spoolman",
   "title": "Spoolman Bridge",
-  "version": "0.1.8",
+  "version": "0.1.9",
   "min_daemon_version": "0.10.1-dev",
   "description": "Reads rfid_data.json at startup and on every card change, syncs the active spool to your Spoolman server. Length used per print is logged automatically.",
   "tagline": "Zero-config Spoolman: active spool always tracked.",
@@ -12,7 +12,7 @@
   "homepage": "https://github.com/bespok3d-org/plugin-spoolman",
   "changelog": "doc/CHANGELOG.md",
   "published_at": "2025-09-20",
-  "updated_at": "2026-06-11",
+  "updated_at": "2026-06-12",
   "publisher": "PLACEHOLDER",
   "provides": [
     {

@@ -12,6 +12,7 @@ A pick made mid-print is deferred and applied when the print leaves printing/pau
 """
 from __future__ import annotations
 
+import base64
 import logging
 import re
 from collections.abc import Awaitable, Callable
@@ -93,6 +94,23 @@ def _format_arg(key: str, value: str) -> str:
 def set_print_filament_config_gcode(args: dict[str, str]) -> str:
     pairs = " ".join(_format_arg(key, value) for key, value in args.items())
     return f"SET_PRINT_FILAMENT_CONFIG {pairs}"
+
+
+# A vendor+name display label ("ZIRO Silk Gold") the AFC panel cannot compose itself: it shows the
+# Spoolman filament.name alone, and only when the frontend can resolve the spool. Pushed to the lane
+# so an untagged channel still gets the richer label; absent vendor or name just drops that part.
+def composed_filament_name(spool: dict) -> str:
+    filament = spool.get("filament") or {}
+    vendor = (filament.get("vendor") or {}).get("name") or ""
+    name = filament.get("name") or ""
+    return " ".join(part for part in (vendor, name) if part)
+
+
+# Base64 so a name with spaces survives Klipper's whitespace-splitting gcode parser (SET_SPOOL_ID
+# only ever carries an int). Addressed by physical extruder, the lane_index the bridge already uses.
+def set_lane_filament_name_gcode(physical_extruder: int, name: str) -> str:
+    encoded = base64.b64encode(name.encode("utf-8")).decode("ascii")
+    return f"SET_LANE_FILAMENT_NAME EXTRUDER={physical_extruder} NAME_B64={encoded}"
 
 
 def _value_at(values: list, index: int) -> Any:
@@ -227,6 +245,13 @@ class PrintTaskBridge:
         if config_already_matches(self.print_task, physical_extruder, desired):
             return
         await self._run_gcode(set_print_filament_config_gcode(desired))
+        await self._apply_filament_name(physical_extruder, spool)
+
+    async def _apply_filament_name(self, physical_extruder: int, spool: dict) -> None:
+        name = composed_filament_name(spool)
+        if not name:
+            return
+        await self._run_gcode(set_lane_filament_name_gcode(physical_extruder, name))
 
     async def _fetch_spool(self, spool_id: int | None) -> dict | None:
         url = f"{self.spoolman_url}/api/v1/spool/{spool_id}"

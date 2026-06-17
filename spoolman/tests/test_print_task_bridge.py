@@ -1,16 +1,19 @@
 # ruff: noqa: PLR2004  Tests assert against literal spool ids, extruders, and colors.
 """Regression tests for the Spoolman -> print_task color/material bridge."""
 import asyncio
+import base64
 
 from print_task_bridge import (
     PrintTaskBridge,
     changed_tool_spools,
     channel_is_official,
+    composed_filament_name,
     config_already_matches,
     filament_config_args_from_spool,
     has_filament_fields,
     normalize_color_rgba,
     physical_extruder_for_tool,
+    set_lane_filament_name_gcode,
     set_print_filament_config_gcode,
 )
 
@@ -27,6 +30,8 @@ EXPECTED_GCODE = (
     'SET_PRINT_FILAMENT_CONFIG CONFIG_EXTRUDER=3 VENDOR="FlashForge" '
     'FILAMENT_TYPE="PLA" FILAMENT_SUBTYPE="" FILAMENT_COLOR_RGBA=5FD4A0FF'
 )
+# A config write also pushes the vendor+name label to the lane (extruder 3).
+EXPECTED_NAME_GCODE = set_lane_filament_name_gcode(3, "FlashForge PLA Spicy Mint")
 
 
 def idle_print_task():
@@ -223,7 +228,26 @@ def build_bridge(print_task, spool_payload=SPOOL, state="standby"):
 def test_untagged_pick_issues_set_print_filament_config():
     bridge, klippy = build_bridge(idle_print_task())
     asyncio.run(bridge._on_status_update({"gcode_macro T3": {"spool_id": 42}}, 0.0))
-    assert klippy.gcodes == [EXPECTED_GCODE]
+    assert klippy.gcodes == [EXPECTED_GCODE, EXPECTED_NAME_GCODE]
+
+
+def test_composed_filament_name_joins_vendor_and_name():
+    assert composed_filament_name(SPOOL) == "FlashForge PLA Spicy Mint"
+
+
+def test_composed_filament_name_drops_missing_parts():
+    assert composed_filament_name({"filament": {"name": "Silk Gold"}}) == "Silk Gold"
+    assert composed_filament_name({"filament": {"vendor": {"name": "ZIRO"}}}) == "ZIRO"
+    assert composed_filament_name({"filament": {}}) == ""
+    assert composed_filament_name({}) == ""
+
+
+def test_set_lane_filament_name_gcode_base64_roundtrips_a_spaced_name():
+    line = set_lane_filament_name_gcode(2, "ZIRO Silk Gold")
+    assert line.startswith("SET_LANE_FILAMENT_NAME EXTRUDER=2 NAME_B64=")
+    encoded = line.rsplit("NAME_B64=", 1)[1]
+    assert " " not in encoded
+    assert base64.b64decode(encoded).decode("utf-8") == "ZIRO Silk Gold"
 
 
 def test_official_channel_is_left_untouched():
@@ -248,7 +272,7 @@ def test_cleared_spool_is_a_no_op():
     bridge, klippy = build_bridge(idle_print_task())
     asyncio.run(bridge._on_status_update({"gcode_macro T3": {"spool_id": 42}}, 0.0))
     asyncio.run(bridge._on_status_update({"gcode_macro T3": {"spool_id": ""}}, 0.0))
-    assert klippy.gcodes == [EXPECTED_GCODE]
+    assert klippy.gcodes == [EXPECTED_GCODE, EXPECTED_NAME_GCODE]
 
 
 def test_mid_print_pick_is_deferred_then_applied_at_print_end():
@@ -256,4 +280,4 @@ def test_mid_print_pick_is_deferred_then_applied_at_print_end():
     asyncio.run(bridge._on_status_update({"gcode_macro T3": {"spool_id": 42}}, 0.0))
     assert klippy.gcodes == []
     asyncio.run(bridge._on_status_update({"print_stats": {"state": "standby"}}, 1.0))
-    assert klippy.gcodes == [EXPECTED_GCODE]
+    assert klippy.gcodes == [EXPECTED_GCODE, EXPECTED_NAME_GCODE]

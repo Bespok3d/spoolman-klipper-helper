@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.1.9
+
+- When mirroring an untagged spool, the bridge now also pushes a composed `"<vendor> <name>"`
+  label ("ZIRO Silk Gold") to the AFC lane via `SET_LANE_FILAMENT_NAME`, alongside the existing
+  color/material write. The AFC panel cannot compose vendor+name itself (it shows the Spoolman
+  filament name alone), so this gives an untagged channel the richer label; RFID-tagged channels
+  stay untouched.
+
 ## 0.1.8
 
 - Fix: the color/material write was rejected by the firmware ("incomplete parameters").
