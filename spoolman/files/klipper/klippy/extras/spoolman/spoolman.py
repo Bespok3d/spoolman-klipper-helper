@@ -4,17 +4,23 @@ import uuid
 
 import gcode
 
+from . import nfc_tracking
+
 PENDING_CLEANUP_SECONDS = 30
 MAX_RETRY_DELAY_SECONDS = 5.0
 RETRY_DELAY_STEP_SECONDS = 1.0
+EMPTY_SPOOL_IDS = (0, "0", "", None)
 
 
 class Spoolman:
-    def __init__(self, printer, logs):
+    def __init__(self, printer, logs, strategy_chain=nfc_tracking.DEFAULT_STRATEGY,
+                 auto_register=True):
         self.printer = printer
         self.logs = logs
         self.gcode = self.printer.lookup_object("gcode")
         self.webhooks = self.printer.lookup_object("webhooks")
+        self.strategy_chain = tuple(strategy_chain)
+        self.auto_register = auto_register
 
     def set_active_spool(self, spool_id):
         try:
@@ -50,36 +56,123 @@ class Spoolman:
         filament_request.fetch("/api/v1/filament", f"article_number={sku}")
 
     def resolve_spool(self, info, callback):
-        vendor = info.get("VENDOR")
-        main = info.get("MAIN_TYPE")
-        sub = info.get("SUB_TYPE")
-        sku = info.get("SKU")
-        spool_id = info.get("SPOOL_ID")
-
+        uid = nfc_tracking.trackable_uid(info.get("CARD_UID"))
         self.logs.verbose(
-            f"Resolving spool: vendor->{vendor}, main->{main}, sub->{sub}, "
-            f"sku->{sku}, spool_id->{spool_id}"
+            f"Resolving spool: vendor->{info.get('VENDOR')}, sku->{info.get('SKU')}, "
+            f"spool_id->{info.get('SPOOL_ID')}, uid->{uid}, chain->{self.strategy_chain}"
         )
+        self._run_strategies(info, uid, list(self.strategy_chain), callback)
 
-        if not sku and not spool_id:
-            self.logs.warn("Missing SKU and SPOOL_ID, cannot resolve via Spoolman API")
+    def _run_strategies(self, info, uid, remaining, callback):
+        if not remaining:
+            self.logs.warn("No resolution strategy matched this tag")
             callback(None)
             return
+        strategy = remaining[0]
 
-        if spool_id and spool_id not in (0, "0", "", None):
-            self.logs.debug(f"Spool already has spool_id ({spool_id}), no lookup needed")
+        def advance():
+            self._run_strategies(info, uid, remaining[1:], callback)
+
+        if strategy == "spool_id":
+            self._resolve_by_spool_id(info, callback, advance)
+        elif strategy == "uid":
+            self._resolve_by_uid(uid, callback, advance)
+        elif strategy == "sku":
+            self._resolve_by_sku(info, uid, callback, advance)
+        else:
+            advance()  # decoded_id / manual: no automatic resolver yet
+
+    def _resolve_by_spool_id(self, info, callback, advance):
+        spool_id = info.get("SPOOL_ID")
+        if spool_id and spool_id not in EMPTY_SPOOL_IDS:
+            self.logs.debug(f"Resolved by spool_id ({spool_id})")
             callback(spool_id)
+        else:
+            advance()
+
+    def _resolve_by_uid(self, uid, callback, advance):
+        if not uid:
+            advance()
             return
 
-        def on_lookup_spoolman(error, spools):
+        def on_spools(error, spools):
+            spool = nfc_tracking.match_spool_by_nfc_id(spools or [], uid)
+            if spool:
+                self.logs.debug(f"Resolved by UID {uid}: spool {spool.get('id')}")
+                callback(spool)
+            else:
+                advance()
+
+        SpoolmanRequest(self.webhooks, self.logs, on_spools).fetch("/api/v1/spool", "")
+
+    def _resolve_by_sku(self, info, uid, callback, advance):
+        sku = info.get("SKU")
+        if not sku:
+            advance()
+            return
+
+        def on_lookup(error, spools):
             if error or not spools:
                 self.logs.error(f"Cannot find spools for sku: {sku}")
-                callback(None)
+                advance()
                 return
-            self.logs.debug(f"Spools for sku->{sku}: {spools}")
+            self.logs.debug(f"Resolved by sku->{sku}: spool {spools[0].get('id')}")
+            self._auto_register_uid(spools[0], uid)
             callback(spools[0])
 
-        self.lookup_spoolman(sku, None, on_lookup_spoolman)
+        self.lookup_spoolman(sku, None, on_lookup)
+
+    def _auto_register_uid(self, spool, uid):
+        if not (self.auto_register and uid) or nfc_tracking.spool_has_nfc_id(spool, uid):
+            return
+        spool_id = spool.get("id")
+        if spool_id:
+            self.bind_uid(spool_id, uid)
+
+    def define_nfc_id_field(self):
+        def on_done(error, payload):
+            self.logs.debug(f"nfc_id field define result: error={error}")
+
+        SpoolmanRequest(self.webhooks, self.logs, on_done).fetch(
+            f"/api/v1/field/spool/{nfc_tracking.NFC_ID_FIELD}", "",
+            method="POST", body=nfc_tracking.nfc_id_field_definition())
+
+    def bind_uid(self, spool_id, uid, on_done=None):
+        if not uid:
+            self.logs.warn("Refusing to bind an empty or non-stable UID")
+            if on_done:
+                on_done(False)
+            return
+
+        def on_spools(error, spools):
+            self._bind_unless_assigned(spool_id, uid, spools or [], on_done)
+
+        SpoolmanRequest(self.webhooks, self.logs, on_spools).fetch("/api/v1/spool", "")
+
+    def _bind_unless_assigned(self, spool_id, uid, spools, on_done):
+        owner = nfc_tracking.match_spool_by_nfc_id(spools, uid)
+        if owner is not None:
+            owner_id = owner.get("id")
+            self.logs.log(f"UID {uid} already assigned to spool {owner_id}, not re-binding")
+            if on_done:
+                on_done(owner_id == spool_id)
+            return
+        target = nfc_tracking.find_spool_by_id(spools, spool_id) or {}
+        self._patch_nfc_id(spool_id, uid, target, on_done)
+
+    def _patch_nfc_id(self, spool_id, uid, spool, on_done):
+        extra = nfc_tracking.merged_extra_with_nfc_id(spool, uid)
+
+        def on_patched(error, payload):
+            if error:
+                self.logs.log(f"Bind failed for spool {spool_id}: {error}")
+            else:
+                self.logs.log(f"Bound UID {uid} -> spool {spool_id}")
+            if on_done:
+                on_done(not error)
+
+        SpoolmanRequest(self.webhooks, self.logs, on_patched).fetch(
+            f"/api/v1/spool/{spool_id}", "", method="PATCH", body={"extra": extra})
 
 
 class SpoolmanRequest:

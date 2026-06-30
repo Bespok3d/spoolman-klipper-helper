@@ -40,6 +40,10 @@ class Commands:
             "SH_DEBUG", self.cmd_SH_DEBUG,
             desc="Spoolman Helper: Debug utilities",
         )
+        self.gcode.register_command(
+            "SH_BIND_NFC", self.cmd_BIND_NFC,
+            desc="Spoolman Helper: Bind a channel's tag UID to a Spoolman spool",
+        )
 
     def cmd_SET_ACTIVE_TOOL(self, gcmd):
         tool_id = gcmd.get_int("TOOL", minval=0, maxval=MAX_TOOLS_MAX_INDEX)
@@ -51,10 +55,7 @@ class Commands:
         self.helper.spoolman.set_active_spool(None)
 
     def cmd_CLEAR_ALL_SPOOLS(self, gcmd):
-        self.helper.clear_spool_ids()
-        for tool in range(MAX_TOOLS_COUNT):
-            self.logs.verbose(f"Clearing spool config for T{tool}")
-            self.helper.macros.set_spool_id_for_tool(f"T{tool}", None)
+        self.helper.clear_all_spools()
 
     def cmd_DETECT_SPOOLS(self, gcmd):
         self.helper.detect_spools()
@@ -82,6 +83,12 @@ class Commands:
             self.helper.logging = log_level
 
         self.logs.log(f"Config: mode->{self.helper.mode}, log level->{self.helper.logging}")
+
+    def cmd_BIND_NFC(self, gcmd):
+        channel = gcmd.get_int("CHANNEL", minval=0, maxval=MAX_TOOLS_MAX_INDEX)
+        spool_id = gcmd.get_int("SPOOL", minval=1)
+        self.logs.verbose(f"BIND_NFC: channel {channel} -> spool {spool_id}")
+        self.helper.bind_channel_nfc(channel, spool_id)
 
     def cmd_SH_DEBUG(self, gcmd):
         sku = gcmd.get("SKU", None)
