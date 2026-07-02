@@ -1,6 +1,6 @@
 # ruff: noqa: PLR2004  Tests assert against literal tool indexes.
 """The in-process watcher: transition detection and the baseline-not-transition first sample."""
-from carrier_watch import (
+from spoolman.carrier_watch import (
     POLL_INTERVAL_SECONDS,
     CarrierWatch,
     changed_tools,

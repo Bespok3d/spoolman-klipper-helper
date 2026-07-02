@@ -11,13 +11,16 @@ reads), with zero patches to Klipper or Moonraker.
   spool active when a tool is picked.
 - Identifies a spool by its tag's hardware UID, not just a decoded id or SKU, so even tags it
   cannot fully decode are tracked once bound (see [Identifying spools by tag](#identifying-spools-by-tag)).
-- Makes a manually picked spool the active/tracked spool, and propagates its color and material
-  to the printer screen and the AFC panel for untagged lanes (see the scenario table below). On a
-  multi-tool printer with AFC, the active spool always tracks whichever lane is actually mounted on
-  the carrier: nothing mounted means no active spool, and a resync that re-touches every lane (e.g.
-  `DETECT_SPOOLS`) never makes an unmounted lane active. This is continuously recomputed from
-  current state, not a one-shot trigger, so switching tools or loading/unloading filament always
-  converges on the right answer.
+- Makes a manually picked spool the active/tracked spool, and propagates its color, material and
+  name to the printer screen and the AFC panel for untagged lanes (see the scenario table below).
+  A spool can be picked from the Spoolman panel, the Spoolman widget, or straight from the **AFC
+  panel's own spool selector** -- all three land in the same place. On a multi-tool printer with
+  AFC, the active spool always tracks whichever lane is actually mounted on the carrier: the
+  switch lands at the toolchange itself (before the prime purge), an eject clears it, and a
+  resync that re-touches every lane (e.g. `DETECT_SPOOLS`) never makes an unmounted lane active.
+- Manually picked spools survive restarts and reboots: picks persist on the printer and are
+  restored at startup, re-labelling the screen and AFC panel on their own. A tag that appears on
+  the lane in the meantime wins.
 - Optionally records which printer a spool is on, in Spoolman's location field (see
   [Where a spool is](#where-a-spool-is-location-tracking)).
 - Handles the U1's 32 virtual-tool system for jobs that need more than 4 filaments.
@@ -41,7 +44,7 @@ also works.
 ### Properly tagged spools
 
 The bridge recognizes a spool by the `spool_id` on its tag. Snapmaker's own tags are
-encrypted, so for those it falls back to the `SKU` and matches it against thev
+encrypted, so for those it falls back to the `SKU` and matches it against the
 **Article Number** field of a filament in your Spoolman instance. Half-kilo and one-kilo
 spools of the same color have different SKUs.
 
@@ -53,8 +56,8 @@ The SKU trick works with any tag the U1 can read that carries such a property.
 
 1. Install this plugin from the Bespok3d store. It pulls in the **RFID Spool Reader**
    automatically.
-2. When prompted, enter your **Spoolman server address** (`host` or `host:port`; the port
-   defaults to `7912` if you omit it). That is the only required setting.
+2. When prompted, enter your **Spoolman server address** as `host:port` (e.g.
+   `192.168.1.50:8000`). That is the only required setting.
 3. The bridge starts syncing immediately; no config files to edit.
 
 ### Show the Spoolman panel in Fluidd
@@ -98,8 +101,8 @@ Optionally the bridge records which printer a spool is on, in Spoolman's **locat
 your Spoolman inventory shows where each spool physically lives.
 
 - Turn on **Track spool location in Spoolman** (off by default).
-- The location name defaults to this printer's own display name (the instance name from your
-  frontend, e.g. `unU1jr`); fill the name field to override it.
+- Fill **This printer's name** with what you want shown as the spool's location (e.g. `unU1jr`);
+  location tracking is inactive until a name is set.
 
 A spool loaded on a lane gets this printer's name written to its location; unloading it clears the
 location. This works for both tagged and manually picked spools. A manually picked spool on an
@@ -112,11 +115,13 @@ Two different pieces of data take two different paths, and knowing which is whic
 every behavior below.
 
 - **Name** always comes from Spoolman, resolved live from the lane/tool's `spool_id`. It shows
-  the instant a spool is picked, with no help from the print task.
+  the instant a spool is picked, with no help from the print task. Every resolved lane (tagged or
+  picked) also gets its display name pushed to the AFC panel, and Fluidd 1.37.2+ shows it there
+  out of the box.
 - **Color, material, and vendor** always come from the firmware's print task (per physical
-  extruder). Both the AFC panel and the touchscreen read them from there. A passive Moonraker
-  observer is the only thing that writes a Spoolman pick back into the print task, using the
-  firmware's own `SET_PRINT_FILAMENT_CONFIG` command (no patches, persisted like a screen edit).
+  extruder). Both the AFC panel and the touchscreen read them from there. The helper writes a
+  Spoolman pick back into the print task in-process, using the firmware's own
+  `SET_PRINT_FILAMENT_CONFIG` command (no patches, persisted like a screen edit).
 
 ### Scenarios
 
@@ -131,8 +136,9 @@ Each line is: **what you have** then how the name behaves, then how color/materi
   so the screen and AFC agree, and makes the picked spool the active/tracked spool.
 - **Untagged, loaded but not picked:** shown as `UNKNOWN` (present but unidentified) rather than
   empty, in the helper's logs and `DUMP_SPOOLS`.
-- **Untagged, picked mid-print:** name shows live; color/material (and the active spool) are applied
-  when the print ends.
+- **Untagged, picked mid-print:** name and the active spool update live; only the firmware
+  color/material write is deferred to when the print leaves printing/paused (the firmware can
+  reject it mid-print).
 - **Spool cleared for a tool:** name clears, and the lane's color/material are reset to empty on the
   screen and AFC. `CLEAR_ALL_SPOOLS` clears every lane, including RFID-tagged ones.
 - **Untagged filament pulled out:** a manually picked spool whose filament you physically remove is

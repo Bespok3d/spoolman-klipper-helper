@@ -1,7 +1,8 @@
 # ruff: noqa: N802  Klipper registers g-code handlers by method name; they must be cmd_UPPERCASE.
 import json
 
-MAX_TOOLS_COUNT = 32
+from .u1_tools import MAX_TOOLS_COUNT
+
 MAX_TOOLS_MAX_INDEX = MAX_TOOLS_COUNT - 1
 
 

@@ -8,11 +8,12 @@ this passive: no gcode is intercepted, no Moonraker round-trip exists, and an in
 always live (no stale-subscription races).
 """
 
+from .u1_tools import EXTRUDERS_COUNT
+
 # 4 Hz: a sample is a handful of in-process attribute reads, and the mount signal (the park
 # detector flipping at physical pickup) should reach Spoolman before the prime-tower purge
 # starts extruding the new filament, not a second later.
 POLL_INTERVAL_SECONDS = 0.25
-EXTRUDERS_COUNT = 4
 ACTIVE_PRINT_STATES = ("printing", "paused")
 
 

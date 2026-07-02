@@ -13,7 +13,7 @@ _gcode_stub = types.ModuleType("gcode")
 _gcode_stub.CommandError = type("CommandError", (Exception,), {})
 sys.modules.setdefault("gcode", _gcode_stub)
 
-from commands import Commands  # noqa: E402  (the gcode stub must exist before this import)
+from spoolman.commands import Commands  # noqa: E402  (the gcode stub must exist before this import)
 from spoolman.spoolman import Spoolman  # noqa: E402
 
 

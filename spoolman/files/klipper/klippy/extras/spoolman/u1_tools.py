@@ -1,3 +1,9 @@
+"""U1 device facts: the print-task file reads and the machine's tooling geometry.
+
+The single home of the U1's physical/virtual tooling constants and of everything read from the
+firmware's print_task.json. Modules that need a U1 fact import it from here, so the future
+mainline-Klipper split has one device seam to cut, not a constant scattered per file.
+"""
 import json
 import os
 from typing import Any

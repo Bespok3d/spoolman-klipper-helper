@@ -12,8 +12,9 @@ from .active_spool import (
     physical_extruder_for_tool,
     resolve_active_spool,
 )
-from .carrier_watch import ACTIVE_PRINT_STATES, EXTRUDERS_COUNT
+from .carrier_watch import ACTIVE_PRINT_STATES
 from .filament_info import filament_info_from_spoolman, filament_info_to_string
+from .u1_tools import EXTRUDERS_COUNT
 
 _ACTIVE_UNRESOLVED = object()
 # A toolchange's park->pick gap is 1-3s of carrier-empty that means NOTHING is settled; an eject

@@ -1,7 +1,7 @@
 {
   "name": "spoolman",
   "title": "Spoolman Bridge",
-  "version": "0.1.27",
+  "version": "0.1.28",
   "min_daemon_version": "0.10.1-dev",
   "description": "Spoolman for the U1 multi-tool: the active spool follows the tag the printer reads or the spool you pick, color and material reach the screen and AFC panel, tags are matched by their hardware UID, and you can record which printer each spool is on. Filament length per print is logged automatically.",
   "tagline": "Zero-config Spoolman: active spool always tracked.",
@@ -186,7 +186,7 @@
       "type": "text",
       "placeholder": "e.g. unU1jr",
       "default": "",
-      "hint": "Leave empty to use this printer's own name automatically; set it to override with whatever you want shown as the spool's location in Spoolman.",
+      "hint": "The name written as a loaded spool's location in Spoolman (e.g. unU1jr). Location tracking is inactive until a name is set.",
       "userEditable": true
     }
   ],

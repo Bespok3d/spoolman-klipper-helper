@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.1.28
+
+- Internal: the helper coordinator was decomposed into one-concern modules (options parsing,
+  holder state, resolution, detection/sync, manual-pick restore, DUMP report); no behavior
+  change. U1-specific facts (tooling constants, print-task reads, AFC lane access) are
+  consolidated behind the device modules, groundwork for a future mainline-Klipper submission.
+
 ## 0.1.27
 
 - Fix: manual-spool restore actually restores. 0.1.26's restore checked filament presence at
