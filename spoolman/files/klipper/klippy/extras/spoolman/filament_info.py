@@ -37,6 +37,20 @@ def is_untagged_filament(filament_info):
     return filament_info.get("VENDOR") in UNTAGGED_VENDORS
 
 
+# A Spoolman spool rendered into the same shape a tag produces, so a manually picked spool logs
+# exactly like a tagged one ("Vendor Material Name (colour: ..., Spoolman id: N, sku: ...)").
+def filament_info_from_spoolman(spool):
+    filament = (spool or {}).get("filament") or {}
+    return {
+        "VENDOR": (filament.get("vendor") or {}).get("name") or "",
+        "MAIN_TYPE": filament.get("material") or "",
+        "SUB_TYPE": filament.get("name") or "",
+        "ARGB_COLOR": filament.get("color_hex") or "",
+        "SPOOL_ID": (spool or {}).get("id"),
+        "SKU": filament.get("article_number") or "",
+    }
+
+
 def filament_descriptor(filament_info):
     if is_untagged_filament(filament_info):
         return UNKNOWN_DESCRIPTOR
@@ -60,8 +74,9 @@ def _rgb_hex(argb_color):
         return f"{argb_color & RGB_MASK:0{RGB_HEX_LENGTH}X}"
     if isinstance(argb_color, str):
         cleaned = argb_color.strip().lstrip("#").upper()
-        if len(cleaned) >= RGB_HEX_LENGTH and all(digit in HEX_DIGITS for digit in cleaned[:RGB_HEX_LENGTH]):
-            return cleaned[:RGB_HEX_LENGTH]
+        prefix = cleaned[:RGB_HEX_LENGTH]
+        if len(cleaned) >= RGB_HEX_LENGTH and all(digit in HEX_DIGITS for digit in prefix):
+            return prefix
     return ""
 
 
@@ -69,7 +84,9 @@ def _nearest_colour_name(rgb_hex):
     red = int(rgb_hex[0:2], HEX_BASE)
     green = int(rgb_hex[2:4], HEX_BASE)
     blue = int(rgb_hex[4:6], HEX_BASE)
-    return min(NAMED_COLOURS, key=lambda name: _colour_distance(NAMED_COLOURS[name], red, green, blue))
+    return min(
+        NAMED_COLOURS, key=lambda name: _colour_distance(NAMED_COLOURS[name], red, green, blue)
+    )
 
 
 def _colour_distance(anchor, red, green, blue):
@@ -88,8 +105,8 @@ def filament_info_to_string(filament_info, level="info"):
     return base + "\nadditional filament info: " + ", ".join(extras)
 
 
-# An unidentified spool has no meaningful colour / spool-id / sku (they are firmware defaults), so it
-# reads as just UNKNOWN instead of carrying noise like a white default colour.
+# An unidentified spool has no meaningful colour / spool-id / sku (they are firmware defaults), so
+# it reads as just UNKNOWN instead of carrying noise like a white default colour.
 def _summary(filament_info):
     if is_untagged_filament(filament_info):
         return UNKNOWN_DESCRIPTOR

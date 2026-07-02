@@ -1,13 +1,17 @@
 import json
 
 from .spoolman.afc import push_spool_to_afc
+from .spoolman.card_uids import parse_strategy_chain, trackable_uid
+from .spoolman.carrier_watch import CarrierWatch
 from .spoolman.commands import Commands
 from .spoolman.filament_info import filament_info_to_string, is_untagged_filament
 from .spoolman.logs import Logs
 from .spoolman.macros import Macros
-from .spoolman.nfc_tracking import parse_strategy_chain, trackable_uid
+from .spoolman.manual_spools import load_manual_spools, store_manual_spool
 from .spoolman.print_lifecycle import PrintLifecycle
+from .spoolman.print_task_writer import PrintTaskWriter
 from .spoolman.spoolman import Spoolman
+from .spoolman.tracking import SpoolTracking
 from .spoolman.u1_tools import U1Tools
 
 TRUTHY = ("true", "1", "on", "yes")
@@ -15,6 +19,7 @@ TRUTHY = ("true", "1", "on", "yes")
 EXTRUDERS_COUNT = 4
 MAX_TOOLS_COUNT = 32
 RFID_DATA_FILE = "/oem/printer_data/config/bespok3d/data/rfid_data.json"
+MANUAL_SPOOLS_FILE = "/oem/printer_data/config/bespok3d/data/manual_spools.json"
 
 
 def update_objects_list(original, updates):
@@ -43,14 +48,22 @@ class SpoolmanHelper:
             mode = "auto"
         self.mode = mode
 
-        strategy_chain = self._read_nfc_config(config)
+        strategy_chain = self._read_card_uids_config(config)
 
         self.logs = Logs(self.printer, self)
         self.u1_tools = U1Tools(config, self.logs)
-        self.spoolman = Spoolman(self.printer, self.logs, strategy_chain, self.nfc_auto_register)
+        self.spoolman = Spoolman(
+            self.printer, self.logs, strategy_chain, self.card_uids_auto_register
+        )
         self.macros = Macros(self.printer, self.logs)
         self.commands = Commands(self.printer, self.logs, self)
         self.lifecycle = PrintLifecycle(self.printer, self.logs, self)
+        self.writer = PrintTaskWriter(self.printer, self.logs, self.macros)
+        self.tracking = SpoolTracking(
+            self,
+            track_location=self._read_flag(config, "track_location"),
+            location=self._read_text(config, "location"),
+        )
 
         self.spool_holders = [None] * EXTRUDERS_COUNT
         self.spools_by_id = {}
@@ -58,17 +71,25 @@ class SpoolmanHelper:
         self.u1_tools.update_map()
         self.printer.register_event_handler("klippy:ready", self._on_ready)
 
-    def _read_nfc_config(self, config):
-        nfc_strategy = config.get("nfc_strategy", "") if hasattr(config, "get") else ""
+    def _read_flag(self, config, key):
+        raw = config.get(key, "false") if hasattr(config, "get") else "false"
+        return str(raw).strip().lower() in TRUTHY
+
+    def _read_text(self, config, key):
+        raw = config.get(key, "") if hasattr(config, "get") else ""
+        return (raw or "").strip()
+
+    def _read_card_uids_config(self, config):
+        strategy_text = config.get("card_uids_strategy", "") if hasattr(config, "get") else ""
         auto_register = (
-            config.get("nfc_auto_register", "false") if hasattr(config, "get") else "false"
+            config.get("card_uids_auto_register", "false") if hasattr(config, "get") else "false"
         )
-        self.nfc_auto_register = str(auto_register).strip().lower() in TRUTHY
-        return parse_strategy_chain(nfc_strategy)
+        self.card_uids_auto_register = str(auto_register).strip().lower() in TRUTHY
+        return parse_strategy_chain(strategy_text)
 
     def _on_ready(self):
         self.logs.log(f"Loaded! mode: {self.mode}, logs level: {self.logging}")
-        self.spoolman.define_nfc_id_field()
+        self.spoolman.define_card_uids_field()
 
         rfid = self.printer.lookup_object('bespok3d_rfid', None)
         if rfid is not None:
@@ -83,6 +104,8 @@ class SpoolmanHelper:
                 self.logs.warn("No notification source available, spool tracking disabled")
 
         self.detect_spools()
+        self._restore_manual_spools()
+        CarrierWatch(self.printer, self.tracking).start()
 
     def _on_filament_update(self, channel, info, is_clear):
         if is_clear:
@@ -97,8 +120,37 @@ class SpoolmanHelper:
         except Exception:
             return {}
 
-    def _push_spool_to_afc(self, channel, spool_id):
+    def push_spool_to_afc(self, channel, spool_id):
         push_spool_to_afc(self.printer, channel, spool_id, EXTRUDERS_COUNT)
+
+    def lane_is_tagged(self, channel):
+        holder = self.spool_holders[channel] if 0 <= channel < EXTRUDERS_COUNT else None
+        return bool(holder) and not is_untagged_filament(holder)
+
+    # Manual picks have no tag to re-read them from after a restart, so they persist to a JSON
+    # file (the rfid_data.json pattern). Only untagged lanes: a tag is its own persistence.
+    def remember_manual_spool(self, tool_index, spool_id):
+        if self.lane_is_tagged(tool_index):
+            return
+        store_manual_spool(MANUAL_SPOOLS_FILE, tool_index, spool_id)
+
+    def _restore_manual_spools(self):
+        for tool_index, spool_id in load_manual_spools(MANUAL_SPOOLS_FILE).items():
+            self._restore_manual_spool(tool_index, spool_id)
+
+    # A tag that appeared on the lane while powered off wins (and the stale entry is dropped).
+    # Filament presence is deliberately NOT checked here: at klippy-ready the firmware's
+    # filament_exist still holds its all-False defaults, so trusting it deletes every pick; a
+    # genuinely pulled filament is released by the removal watcher once the firmware reports it.
+    # Replaying through the normal pick cascade re-labels the screen, AFC lane, and location.
+    def _restore_manual_spool(self, tool_index, spool_id):
+        if self.lane_is_tagged(tool_index):
+            store_manual_spool(MANUAL_SPOOLS_FILE, tool_index, None)
+            self.logs.verbose(f"Manual spool {spool_id} for T{tool_index} superseded by a tag")
+            return
+        self.logs.log(f"Restoring manual spool {spool_id} for T{tool_index}")
+        self.macros.set_spool_id_for_tool(f"T{tool_index}", spool_id)
+        self.tracking.on_pick(tool_index, spool_id, "")
 
     def set_spool_for_channel(self, channel, filament_info):
         self.logs.verbose(f"Received spool for extruder {channel}")
@@ -111,9 +163,9 @@ class SpoolmanHelper:
         self.spool_holders[channel] = filament_info
         self.apply_spool_for_extruder(channel)
 
-    # An untagged report is a "loaded but unidentified" spool only when filament is actually present.
-    # DETECT_SPOOLS re-reads every channel, so a bare lane reports untagged too -- that is empty, not
-    # UNKNOWN. The firmware's filament_exist flag is the presence signal.
+    # An untagged report is a "loaded but unidentified" spool only when filament is actually
+    # present. DETECT_SPOOLS re-reads every channel, so a bare lane reports untagged too -- that
+    # is empty, not UNKNOWN. The firmware's filament_exist flag is the presence signal.
     def _note_untagged_lane(self, channel, filament_info):
         if self._lane_has_filament(channel):
             self.spool_holders[channel] = filament_info
@@ -136,7 +188,7 @@ class SpoolmanHelper:
             return
         tool = f"T{channel}"
         self.macros.set_spool_id_for_tool(tool, None)
-        self._push_spool_to_afc(channel, None)
+        self.push_spool_to_afc(channel, None)
         if force:
             self.macros.clear_print_task_config(channel)
         holder = self.spool_holders[channel]
@@ -150,7 +202,7 @@ class SpoolmanHelper:
         self.clear_spool_ids()
         for channel in range(EXTRUDERS_COUNT):
             self.clear_spool_for_channel(channel, force=True)
-        self.spoolman.clear_active_spool()
+        self.tracking.clear_active()
 
     def find_spool_for_tool(self, tool_id):
         macro_spool = self.get_spool_for_tool(tool_id)
@@ -167,7 +219,17 @@ class SpoolmanHelper:
         tool = f"T{extruder}"
         self.logs.log(f"Tool {tool} is using: {filament_info_to_string(spool, self.logging)}")
         self.macros.set_spool_id_for_tool(tool, spool_id)
-        self._push_spool_to_afc(extruder, spool_id)
+        self.push_spool_to_afc(extruder, spool_id)
+        self._label_lane_from_spoolman(extruder, spool_id)
+
+    # The AFC panel only displays a lane name the helper pushed; an RFID-resolved lane deserves
+    # one as much as a manual pick does (the tag's own vendor/type is not the Spoolman name).
+    def _label_lane_from_spoolman(self, extruder, spool_id):
+        def on_spool(spoolman_spool, target_extruder=extruder):
+            if spoolman_spool:
+                self.writer.label_lane(target_extruder, spoolman_spool)
+
+        self.spoolman.fetch_spool(spool_id, on_spool)
 
     def apply_spool_for_extruder(self, extruder):
         self.logs.verbose(f"Trying to bind spool to extruder {extruder}")
@@ -230,10 +292,9 @@ class SpoolmanHelper:
         if not (spool and spool.get("SPOOL_ID")):
             self.logs.warn(f"Cannot set active spool for T{tool_id}: unable to resolve spool id")
             return
-        self.logs.log(f"Tracking: {filament_info_to_string(spool, self.logging)}")
-        self.spoolman.set_active_spool(spool["SPOOL_ID"])
+        self.tracking.track_tool_spool(spool["SPOOL_ID"])
 
-    def bind_channel_nfc(self, channel, spool_id):
+    def bind_channel_card_uid(self, channel, spool_id):
         if not (0 <= channel < EXTRUDERS_COUNT):
             self.logs.error(f"Channel must be 0..{EXTRUDERS_COUNT - 1}")
             return
@@ -262,7 +323,7 @@ class SpoolmanHelper:
         self.spoolman.resolve_spool({"SPOOL_ID": spool_id}, on_spool)
         extruder = self.u1_tools.extruder_for_tool(tool_id)
         if extruder is not None:
-            self._push_spool_to_afc(extruder, spool_id)
+            self.push_spool_to_afc(extruder, spool_id)
 
     def detect_spools(self):
         spools = self.u1_tools.get_spools_config()
@@ -291,27 +352,31 @@ class SpoolmanHelper:
         for channel in range(EXTRUDERS_COUNT):
             self.logs.log(f"T{channel}: {self._lane_summary(channel)}")
 
-    # The spool a lane effectively carries: a real detected (tagged/resolved) spool wins; otherwise a
-    # hand-assigned Spoolman spool_id; otherwise a loaded-but-unidentified spool is UNKNOWN and a bare
-    # lane is empty. Keeps DUMP honest about a manually picked spool instead of showing UNKNOWN.
+    # The spool a lane effectively carries: a real detected (tagged/resolved) spool wins;
+    # otherwise a hand-assigned Spoolman spool_id; otherwise a loaded-but-unidentified spool is
+    # UNKNOWN and a bare lane is empty. Keeps DUMP honest about a manual pick instead of UNKNOWN.
     def _lane_summary(self, channel):
         holder = self.spool_holders[channel]
         if holder and not is_untagged_filament(holder):
             return filament_info_to_string(holder, self.logging)
-        assigned = self.macros.get_spool_id_for_tool(channel)
-        if assigned:
-            resolved = self.spools_by_id.get(assigned)
-            if resolved:
-                return filament_info_to_string(resolved, self.logging)
-            label = self._assigned_lane_label(channel)
-            return f"Spoolman spool {assigned} (manually assigned){label}"
-        if holder:
-            return "UNKNOWN (loaded, no tag)"
-        return "empty"
+        manual = self._manual_lane_summary(channel)
+        if manual:
+            return manual
+        return "UNKNOWN (loaded, no tag)" if holder else "empty"
 
-    # "<vendor> <filament name>" (e.g. "ELEGOO Matte Teal Green") that the bridge already pushed onto
-    # the AFC lane via SET_LANE_FILAMENT_NAME; read it back so DUMP names a manual pick. Empty if AFC
-    # is absent or no name was pushed.
+    def _manual_lane_summary(self, channel):
+        assigned = self.macros.get_spool_id_for_tool(channel)
+        if not assigned:
+            return None
+        resolved = self.spools_by_id.get(assigned)
+        if resolved:
+            return filament_info_to_string(resolved, self.logging)
+        label = self._assigned_lane_label(channel)
+        return f"Spoolman spool {assigned} (manually assigned){label}"
+
+    # "<vendor> <filament name>" (e.g. "ELEGOO Matte Teal Green") that the bridge already pushed
+    # onto the AFC lane via SET_LANE_FILAMENT_NAME; read it back so DUMP names a manual pick.
+    # Empty if AFC is absent or no name was pushed.
     def _assigned_lane_label(self, channel):
         lane = self.printer.lookup_object(f"AFC_lane E{channel}", None)
         name = getattr(lane, "filament_name", "") if lane is not None else ""

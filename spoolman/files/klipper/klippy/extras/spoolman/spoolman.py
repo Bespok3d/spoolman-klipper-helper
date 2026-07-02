@@ -4,23 +4,25 @@ import uuid
 
 import gcode
 
-from . import nfc_tracking
+from . import card_uids
 
 PENDING_CLEANUP_SECONDS = 30
 MAX_RETRY_DELAY_SECONDS = 5.0
 RETRY_DELAY_STEP_SECONDS = 1.0
+MAX_REMOTE_METHOD_RETRIES = 10
 EMPTY_SPOOL_IDS = (0, "0", "", None)
 
 
 class Spoolman:
-    def __init__(self, printer, logs, strategy_chain=nfc_tracking.DEFAULT_STRATEGY,
-                 auto_register=True):
+    def __init__(self, printer, logs, strategy_chain=card_uids.DEFAULT_STRATEGY,
+                 auto_register=False):
         self.printer = printer
         self.logs = logs
         self.gcode = self.printer.lookup_object("gcode")
         self.webhooks = self.printer.lookup_object("webhooks")
         self.strategy_chain = tuple(strategy_chain)
         self.auto_register = auto_register
+        self._active_spool_epoch = 0
 
     def set_active_spool(self, spool_id):
         try:
@@ -29,13 +31,52 @@ class Spoolman:
             self.logs.warn(f"Cannot set active spool to {spool_id}, value must be a number or None")
             spool_id = None
         self.logs.verbose(f"Active spool is: {spool_id}")
-        self.webhooks.call_remote_method("spoolman_set_active_spool", spool_id=spool_id)
+        self._active_spool_epoch += 1
+        self._call_set_active_spool(spool_id, self._active_spool_epoch, attempt=0)
 
-    def clear_active_spool(self):
-        self.logs.verbose("Active spool cleared")
-        self.set_active_spool(None)
+    # Right after a Klipper restart Moonraker has not reconnected yet, so its remote methods are
+    # not registered and the first push (the ground-truth one) would be lost. Retry with backoff;
+    # an epoch guard drops a stale retry when a newer set has superseded it.
+    def _call_set_active_spool(self, spool_id, epoch, attempt):
+        try:
+            self.webhooks.call_remote_method("spoolman_set_active_spool", spool_id=spool_id)
+        except gcode.CommandError as command_err:
+            if "not registered" not in str(command_err):
+                raise
+            self._retry_set_active_spool(spool_id, epoch, attempt)
 
-    def lookup_spoolman(self, sku, info, callback):
+    def _retry_set_active_spool(self, spool_id, epoch, attempt):
+        if attempt >= MAX_REMOTE_METHOD_RETRIES:
+            self.logs.error(f"Cannot set active spool {spool_id}: Moonraker never registered")
+            return
+        reactor = self.printer.get_reactor()
+        delay = min(MAX_RETRY_DELAY_SECONDS, RETRY_DELAY_STEP_SECONDS * (attempt + 1))
+
+        def retry(eventtime):
+            if epoch == self._active_spool_epoch:
+                self._call_set_active_spool(spool_id, epoch, attempt + 1)
+            return reactor.NEVER
+
+        reactor.register_timer(retry, reactor.monotonic() + delay)
+
+    def fetch_spool(self, spool_id, on_spool):
+        def on_result(error, spool):
+            if error:
+                self.logs.warn(f"Spool fetch failed for {spool_id}: {error}")
+            on_spool(None if error else spool)
+
+        SpoolmanRequest(self.webhooks, self.logs, on_result).fetch(
+            f"/api/v1/spool/{spool_id}", "")
+
+    def patch_location(self, spool_id, location):
+        def on_result(error, payload):
+            if error:
+                self.logs.warn(f"Location update failed for spool {spool_id}: {error}")
+
+        SpoolmanRequest(self.webhooks, self.logs, on_result).fetch(
+            f"/api/v1/spool/{spool_id}", "", method="PATCH", body={"location": location})
+
+    def lookup_spoolman(self, sku, callback):
         self.logs.verbose(f"Looking up {sku}")
 
         def on_spool_result(error, spools):
@@ -56,7 +97,7 @@ class Spoolman:
         filament_request.fetch("/api/v1/filament", f"article_number={sku}")
 
     def resolve_spool(self, info, callback):
-        uid = nfc_tracking.trackable_uid(info.get("CARD_UID"))
+        uid = card_uids.trackable_uid(info.get("CARD_UID"))
         self.logs.verbose(
             f"Resolving spool: vendor->{info.get('VENDOR')}, sku->{info.get('SKU')}, "
             f"spool_id->{info.get('SPOOL_ID')}, uid->{uid}, chain->{self.strategy_chain}"
@@ -96,7 +137,7 @@ class Spoolman:
             return
 
         def on_spools(error, spools):
-            spool = nfc_tracking.match_spool_by_nfc_id(spools or [], uid)
+            spool = card_uids.match_spool_by_card_uid(spools or [], uid)
             if spool:
                 self.logs.debug(f"Resolved by UID {uid}: spool {spool.get('id')}")
                 callback(spool)
@@ -120,22 +161,22 @@ class Spoolman:
             self._auto_register_uid(spools[0], uid)
             callback(spools[0])
 
-        self.lookup_spoolman(sku, None, on_lookup)
+        self.lookup_spoolman(sku, on_lookup)
 
     def _auto_register_uid(self, spool, uid):
-        if not (self.auto_register and uid) or nfc_tracking.spool_has_nfc_id(spool, uid):
+        if not (self.auto_register and uid) or card_uids.spool_has_card_uid(spool, uid):
             return
         spool_id = spool.get("id")
         if spool_id:
             self.bind_uid(spool_id, uid)
 
-    def define_nfc_id_field(self):
+    def define_card_uids_field(self):
         def on_done(error, payload):
-            self.logs.debug(f"nfc_id field define result: error={error}")
+            self.logs.debug(f"card_uids field define result: error={error}")
 
         SpoolmanRequest(self.webhooks, self.logs, on_done).fetch(
-            f"/api/v1/field/spool/{nfc_tracking.NFC_ID_FIELD}", "",
-            method="POST", body=nfc_tracking.nfc_id_field_definition())
+            f"/api/v1/field/spool/{card_uids.CARD_UIDS_FIELD}", "",
+            method="POST", body=card_uids.card_uids_field_definition())
 
     def bind_uid(self, spool_id, uid, on_done=None):
         if not uid:
@@ -150,18 +191,18 @@ class Spoolman:
         SpoolmanRequest(self.webhooks, self.logs, on_spools).fetch("/api/v1/spool", "")
 
     def _bind_unless_assigned(self, spool_id, uid, spools, on_done):
-        owner = nfc_tracking.match_spool_by_nfc_id(spools, uid)
+        owner = card_uids.match_spool_by_card_uid(spools, uid)
         if owner is not None:
             owner_id = owner.get("id")
             self.logs.log(f"UID {uid} already assigned to spool {owner_id}, not re-binding")
             if on_done:
                 on_done(owner_id == spool_id)
             return
-        target = nfc_tracking.find_spool_by_id(spools, spool_id) or {}
-        self._patch_nfc_id(spool_id, uid, target, on_done)
+        target = card_uids.find_spool_by_id(spools, spool_id) or {}
+        self._patch_card_uids(spool_id, uid, target, on_done)
 
-    def _patch_nfc_id(self, spool_id, uid, spool, on_done):
-        extra = nfc_tracking.merged_extra_with_nfc_id(spool, uid)
+    def _patch_card_uids(self, spool_id, uid, spool, on_done):
+        extra = card_uids.merged_extra_with_card_uids(spool, uid)
 
         def on_patched(error, payload):
             if error:

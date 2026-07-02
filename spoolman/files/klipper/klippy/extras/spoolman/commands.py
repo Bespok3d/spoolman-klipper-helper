@@ -41,7 +41,7 @@ class Commands:
             desc="Spoolman Helper: Debug utilities",
         )
         self.gcode.register_command(
-            "SH_BIND_NFC", self.cmd_BIND_NFC,
+            "SH_BIND_CARD_UID", self.cmd_BIND_CARD_UID,
             desc="Spoolman Helper: Bind a channel's tag UID to a Spoolman spool",
         )
 
@@ -52,7 +52,7 @@ class Commands:
 
     def cmd_CLEAR_ACTIVE_SPOOL(self, gcmd):
         self.logs.log("Active Spool Cleared")
-        self.helper.spoolman.set_active_spool(None)
+        self.helper.tracking.clear_active()
 
     def cmd_CLEAR_ALL_SPOOLS(self, gcmd):
         self.helper.clear_all_spools()
@@ -84,11 +84,11 @@ class Commands:
 
         self.logs.log(f"Config: mode->{self.helper.mode}, log level->{self.helper.logging}")
 
-    def cmd_BIND_NFC(self, gcmd):
+    def cmd_BIND_CARD_UID(self, gcmd):
         channel = gcmd.get_int("CHANNEL", minval=0, maxval=MAX_TOOLS_MAX_INDEX)
         spool_id = gcmd.get_int("SPOOL", minval=1)
-        self.logs.verbose(f"BIND_NFC: channel {channel} -> spool {spool_id}")
-        self.helper.bind_channel_nfc(channel, spool_id)
+        self.logs.verbose(f"BIND_CARD_UID: channel {channel} -> spool {spool_id}")
+        self.helper.bind_channel_card_uid(channel, spool_id)
 
     def cmd_SH_DEBUG(self, gcmd):
         sku = gcmd.get("SKU", None)

@@ -10,9 +10,14 @@ reads), with zero patches to Klipper or Moonraker.
 - Detects RFID-tagged spools (via the RFID Spool Reader plugin) and sets the matching
   spool active when a tool is picked.
 - Identifies a spool by its tag's hardware UID, not just a decoded id or SKU, so even tags it
-  cannot fully decode are tracked once bound (see [Identifying spools by tag](#identifying-spools-by-tag-nfc)).
+  cannot fully decode are tracked once bound (see [Identifying spools by tag](#identifying-spools-by-tag)).
 - Makes a manually picked spool the active/tracked spool, and propagates its color and material
-  to the printer screen and the AFC panel for untagged lanes (see the scenario table below).
+  to the printer screen and the AFC panel for untagged lanes (see the scenario table below). On a
+  multi-tool printer with AFC, the active spool always tracks whichever lane is actually mounted on
+  the carrier: nothing mounted means no active spool, and a resync that re-touches every lane (e.g.
+  `DETECT_SPOOLS`) never makes an unmounted lane active. This is continuously recomputed from
+  current state, not a one-shot trigger, so switching tools or loading/unloading filament always
+  converges on the right answer.
 - Optionally records which printer a spool is on, in Spoolman's location field (see
   [Where a spool is](#where-a-spool-is-location-tracking)).
 - Handles the U1's 32 virtual-tool system for jobs that need more than 4 filaments.
@@ -64,7 +69,7 @@ arranged your dashboard, so look around for it.
 
 ![Spoolman panel in Fluidd](images/spoolman.png)
 
-## Identifying spools by tag (NFC)
+## Identifying spools by tag
 
 A spool is matched to your Spoolman inventory by a chain of identities, tried in order, first
 match wins. By default that order is `spool_id, uid, sku`:
@@ -76,15 +81,16 @@ match wins. By default that order is `spool_id, uid, sku`:
 - **sku**: the tag's SKU matched against a filament's **Article Number** in Spoolman.
 
 You can change the order with the **Spool resolution order** setting. A bound UID is stored on the
-Spoolman spool in an `nfc_id` field (a list, since a spool can carry two tags); bindings are
+Spoolman spool in a `card_uids` field (a list, since a spool can carry two tags). That is the same
+field a companion mobile app writes, so a binding made on either side is shared. Bindings are
 additive and de-duplicated, and a spool's other fields are preserved. Re-randomizing tags
 (DESFire) are never used as a key.
 
 - **Auto-bind** (off by default): turn on **Auto-bind tag UID on SKU match** and the first time a
   spool is resolved by SKU its current tag UID is written onto that spool, so the next tap is a
   direct UID match. With it off, UIDs are only ever bound when you ask.
-- **Manual bind:** run `SH_BIND_NFC CHANNEL={0..3} SPOOL=<id>` to bind the tag currently on a lane
-  to a specific Spoolman spool. Handy to recover from a miss, or to register a tag up front.
+- **Manual bind:** run `SH_BIND_CARD_UID CHANNEL={0..3} SPOOL=<id>` to bind the tag currently on a
+  lane to a specific Spoolman spool. Handy to recover from a miss, or to register a tag up front.
 
 ## Where a spool is (location tracking)
 
@@ -152,11 +158,13 @@ Each line is: **what you have** then how the name behaves, then how color/materi
 These are added by the plugin and can be run from the Fluidd/Mainsail console or your
 slicer:
 
-- `SET_ACTIVE_SPOOL TOOL={0..3}` sets the selected tool as the active spool.
+- `SET_ACTIVE_SPOOL TOOL={0..3}` manually sets the selected tool as the active spool. On a
+  multi-tool printer with AFC this is rarely needed: the active spool already follows whichever
+  tool is mounted automatically (see above).
 - `READ_FILAMENT_ID TOOL={0..3}` reads the selected lane's spool tag, if any.
 - `GET_FILAMENT_ID TOOL={0..3}` prints the currently read tag for the selected lane.
-- `SH_BIND_NFC CHANNEL={0..3} SPOOL=<id>` binds the tag currently on a lane to a Spoolman spool,
-  so the next tap of that tag resolves to it directly.
+- `SH_BIND_CARD_UID CHANNEL={0..3} SPOOL=<id>` binds the tag currently on a lane to a Spoolman
+  spool, so the next tap of that tag resolves to it directly.
 - `CLEAR_ACTIVE_SPOOL` clears the current active spool.
 - `CLEAR_ALL_SPOOLS` clears the selected spool for every tool, including RFID-tagged lanes.
 - `DETECT_SPOOLS` re-detects the loaded spools. A handy reset when spool state looks wrong.
@@ -175,7 +183,7 @@ slicer:
   the fallback.
 - **Log level** (`error` < `info` < `warn` < `verbose` < `debug`): how chatty the logs are.
 - **Spool resolution order** (default `spool_id,uid,sku`): the identity chain used to match a tag
-  to a Spoolman spool, first match wins. See [Identifying spools by tag](#identifying-spools-by-tag-nfc).
+  to a Spoolman spool, first match wins. See [Identifying spools by tag](#identifying-spools-by-tag).
 - **Auto-bind tag UID on SKU match** (off by default): when a spool is found by SKU and has no UID
   yet, write the current tag's UID onto it so the next tap is a direct match.
 - **Track spool location in Spoolman** (off by default): write this printer's name into a loaded

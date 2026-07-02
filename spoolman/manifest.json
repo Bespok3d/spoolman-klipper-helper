@@ -1,7 +1,7 @@
 {
   "name": "spoolman",
   "title": "Spoolman Bridge",
-  "version": "0.1.11",
+  "version": "0.1.27",
   "min_daemon_version": "0.10.1-dev",
   "description": "Spoolman for the U1 multi-tool: the active spool follows the tag the printer reads or the spool you pick, color and material reach the screen and AFC panel, tags are matched by their hardware UID, and you can record which printer each spool is on. Filament length per print is logged automatically.",
   "tagline": "Zero-config Spoolman: active spool always tracked.",
@@ -12,7 +12,7 @@
   "homepage": "https://github.com/bespok3d-org/plugin-spoolman",
   "changelog": "doc/CHANGELOG.md",
   "published_at": "2025-09-20",
-  "updated_at": "2026-06-12",
+  "updated_at": "2026-07-02",
   "publisher": "PLACEHOLDER",
   "provides": [
     {
@@ -59,7 +59,7 @@
       "description": "Print the currently read tag for the selected lane."
     },
     {
-      "name": "SH_BIND_NFC",
+      "name": "SH_BIND_CARD_UID",
       "params": "CHANNEL={0..3} SPOOL=<id>",
       "description": "Bind the tag UID currently on a lane to a Spoolman spool, so the next tap of that tag resolves to it directly."
     },
@@ -148,7 +148,7 @@
       "userEditable": true
     },
     {
-      "key": "NFC_STRATEGY",
+      "key": "CARD_UIDS_STRATEGY",
       "label": "Spool resolution order",
       "type": "text",
       "placeholder": "spool_id,uid,sku",
@@ -157,7 +157,7 @@
       "userEditable": true
     },
     {
-      "key": "NFC_AUTO_REGISTER",
+      "key": "CARD_UIDS_AUTO_REGISTER",
       "label": "Auto-bind tag UID on SKU match",
       "type": "select",
       "options": [
@@ -165,7 +165,7 @@
         "false"
       ],
       "default": "false",
-      "hint": "Opt-in (off by default). When on, a spool found by SKU that has no UID yet gets the current tag's UID written onto it in Spoolman, so the next tap is a direct UID match. Off means tags are only ever bound on your explicit request (SH_BIND_NFC).",
+      "hint": "Opt-in (off by default). When on, a spool found by SKU that has no UID yet gets the current tag's UID written onto it in Spoolman, so the next tap is a direct UID match. Off means tags are only ever bound on your explicit request (SH_BIND_CARD_UID).",
       "userEditable": true
     },
     {
@@ -216,7 +216,7 @@
       },
       {
         "class": "moonraker-component",
-        "src": "files/moonraker/print_task_bridge.py"
+        "src": "files/moonraker/afc_ui_defaults.py"
       },
       {
         "class": "klipper-config",
