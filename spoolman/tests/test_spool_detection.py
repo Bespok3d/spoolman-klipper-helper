@@ -53,13 +53,9 @@ class FakeU1Tools:
     def __init__(self, spools_config, extruder_by_tool=None):
         self.spools_config = spools_config
         self.extruder_by_tool = extruder_by_tool or {}
-        self.map_updates = 0
 
     def get_spools_config(self):
         return self.spools_config
-
-    def update_map(self):
-        self.map_updates += 1
 
     def extruder_for_tool(self, tool_id):
         return self.extruder_by_tool.get(tool_id)
@@ -123,11 +119,11 @@ def test_detect_without_a_rfid_file_still_runs(tmp_path):
     assert helper.resolution.applied_extruders == [0]
 
 
-def test_sync_in_auto_mode_only_refreshes_the_tool_map(tmp_path):
-    detection, helper, _afc_pushes = build_detection(tmp_path, spools_config=[])
+def test_sync_in_auto_mode_is_a_noop_because_the_map_is_live(tmp_path):
+    detection, helper, afc_pushes = build_detection(tmp_path, spools_config=[])
     detection.sync_spools_tools()
-    assert helper.u1_tools.map_updates == 1
     assert helper.spoolman.resolved_infos == []
+    assert afc_pushes == []
 
 
 def test_sync_in_manual_mode_resolves_every_pick_and_mirrors_mapped_tools(tmp_path):
@@ -139,4 +135,3 @@ def test_sync_in_manual_mode_resolves_every_pick_and_mirrors_mapped_tools(tmp_pa
     detection.sync_spools_tools()
     assert helper.holders.spools_by_id == {55: {"id": 55}, 80: {"id": 80}}
     assert afc_pushes == [(2, 55)]
-    assert helper.u1_tools.map_updates == 0

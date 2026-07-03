@@ -1,7 +1,7 @@
 {
   "name": "spoolman",
   "title": "Spoolman Bridge",
-  "version": "0.1.28",
+  "version": "0.1.29",
   "min_daemon_version": "0.10.1-dev",
   "description": "Spoolman for the U1 multi-tool: the active spool follows the tag the printer reads or the spool you pick, color and material reach the screen and AFC panel, tags are matched by their hardware UID, and you can record which printer each spool is on. Filament length per print is logged automatically.",
   "tagline": "Zero-config Spoolman: active spool always tracked.",
@@ -12,7 +12,7 @@
   "homepage": "https://github.com/bespok3d-org/plugin-spoolman",
   "changelog": "doc/CHANGELOG.md",
   "published_at": "2025-09-20",
-  "updated_at": "2026-07-02",
+  "updated_at": "2026-07-03",
   "publisher": "PLACEHOLDER",
   "provides": [
     {
@@ -118,7 +118,8 @@
       "placeholder": "192.168.1.50:8000",
       "hint": "Host or host:port of your Spoolman instance.",
       "required": true,
-      "userEditable": true
+      "userEditable": true,
+      "scope": "global"
     },
     {
       "key": "SPOOLMAN_MODE",
@@ -130,7 +131,8 @@
       ],
       "default": "auto",
       "hint": "auto: RFID is the source of truth, falls back to the manual spool. manual: the manual selection drives, tags are the fallback.",
-      "userEditable": true
+      "userEditable": true,
+      "scope": "global"
     },
     {
       "key": "SPOOLMAN_LOGGING",
@@ -145,7 +147,8 @@
       ],
       "default": "info",
       "hint": "How chatty the logs are, from least to most.",
-      "userEditable": true
+      "userEditable": true,
+      "scope": "global"
     },
     {
       "key": "CARD_UIDS_STRATEGY",
@@ -154,7 +157,8 @@
       "placeholder": "spool_id,uid,sku",
       "default": "spool_id,uid,sku",
       "hint": "Comma-separated, first match wins. Options: spool_id (id on the tag), uid (the tag's hardware UID, bound in Spoolman), sku.",
-      "userEditable": true
+      "userEditable": true,
+      "scope": "global"
     },
     {
       "key": "CARD_UIDS_AUTO_REGISTER",
@@ -166,7 +170,8 @@
       ],
       "default": "false",
       "hint": "Opt-in (off by default). When on, a spool found by SKU that has no UID yet gets the current tag's UID written onto it in Spoolman, so the next tap is a direct UID match. Off means tags are only ever bound on your explicit request (SH_BIND_CARD_UID).",
-      "userEditable": true
+      "userEditable": true,
+      "scope": "global"
     },
     {
       "key": "SPOOLMAN_TRACK_LOCATION",
@@ -178,7 +183,8 @@
       ],
       "default": "false",
       "hint": "When on, a spool loaded on this printer gets this printer's name written to its Spoolman location, and it is cleared when the spool is unloaded -- so you can see in Spoolman which printer a spool is on.",
-      "userEditable": true
+      "userEditable": true,
+      "scope": "global"
     },
     {
       "key": "SPOOLMAN_LOCATION",
@@ -187,7 +193,8 @@
       "placeholder": "e.g. unU1jr",
       "default": "",
       "hint": "The name written as a loaded spool's location in Spoolman (e.g. unU1jr). Location tracking is inactive until a name is set.",
-      "userEditable": true
+      "userEditable": true,
+      "scope": "printer"
     }
   ],
   "permissions": [

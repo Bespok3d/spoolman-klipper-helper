@@ -109,6 +109,13 @@ location. This works for both tagged and manually picked spools. A manually pick
 untagged lane is released (and its location cleared) the moment its filament is physically pulled,
 driven by the printer's filament sensor, so it never goes stale.
 
+**Per-printer vs shared settings.** In Bespok3d, **This printer's name (Spoolman location)** is a
+per-printer setting (manifest `scope: "printer"`): each printer keeps its own value, so every
+printer writes its own location. The plugin's other settings (server address, selection mode, log
+level, resolution order, the auto-bind toggle, and the location toggle) are shared across all your
+printers by default (`scope: "global"`). You can still override any of them for a single printer
+from the plugin's Config tab.
+
 ## How filament data flows (scenarios and gotchas)
 
 Two different pieces of data take two different paths, and knowing which is which explains

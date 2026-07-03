@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.1.29
+
+- Fix: a manual tool change while the printer is idle no longer prints a phantom "Cannot resolve
+  extruder for T{n}" error. The tool-to-extruder map had two sources of truth: the tracker read
+  the live firmware map (always current), while the tool lookup read a separate cached copy that
+  was only filled during a print and wiped when a print ended. Outside a print (and permanently in
+  manual mode) the cache was empty, so the lookup failed and logged the error even though the
+  tracker resolved the same tool fine. The cache is gone; both now read the one live map.
+- Internal: removed the unused print-resume handler that only refreshed that cache.
+
 ## 0.1.28
 
 - Internal: the helper coordinator was decomposed into one-concern modules (options parsing,

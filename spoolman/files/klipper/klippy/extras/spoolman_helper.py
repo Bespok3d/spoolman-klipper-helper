@@ -58,7 +58,6 @@ class SpoolmanHelper:
         self.manual_restore = ManualSpoolRestore(self, MANUAL_SPOOLS_FILE)
         self.report = LaneReport(self)
 
-        self.u1_tools.update_map()
         self.printer.register_event_handler("klippy:ready", self._on_ready)
 
     def _on_ready(self):

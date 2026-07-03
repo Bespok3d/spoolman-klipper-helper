@@ -50,8 +50,9 @@ class SpoolDetection:
             self.logs.verbose(f"Restored rfid data for extruder {extruder} from rfid_data.json")
 
     def sync_spools_tools(self):
+        # Auto mode needs no sync: the tool map is read live, never cached. Only manual picks,
+        # which have no live source, are replayed onto their mapped tools here.
         if self.helper.mode != 'manual':
-            self.u1_tools.update_map()
             return
         for tool_id in range(MAX_TOOLS_COUNT):
             self._sync_manual_tool(tool_id)

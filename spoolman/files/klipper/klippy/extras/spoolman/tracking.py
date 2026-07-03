@@ -14,7 +14,7 @@ from .active_spool import (
 )
 from .carrier_watch import ACTIVE_PRINT_STATES
 from .filament_info import filament_info_from_spoolman, filament_info_to_string
-from .u1_tools import EXTRUDERS_COUNT
+from .u1_tools import EXTRUDERS_COUNT, live_extruder_map
 
 _ACTIVE_UNRESOLVED = object()
 # A toolchange's park->pick gap is 1-3s of carrier-empty that means NOTHING is settled; an eject
@@ -41,10 +41,7 @@ class SpoolTracking:
         self.carrier_empty_since = None
 
     def _extruder_map(self):
-        task = self.printer.lookup_object("print_task_config", None)
-        config = getattr(task, "print_task_config", None)
-        table = config.get("extruder_map_table") if isinstance(config, dict) else None
-        return table if isinstance(table, list) else list(range(EXTRUDERS_COUNT))
+        return live_extruder_map(self.printer)
 
     def on_primed(self, spool_by_tool, lane, afc_present, state=""):
         self.spool_by_tool = dict(spool_by_tool)
