@@ -17,7 +17,7 @@ spoolman-klipper-helper/
 ```
 
 The plugin declares WHAT (destination classes + restart hooks), never paths or raw commands; the
-printer-side adapter realizes it. See `Bespok3d/doc/anatomy-of-a-plugin.md`.
+printer-side adapter realizes it.
 
 ## Build locally
 
