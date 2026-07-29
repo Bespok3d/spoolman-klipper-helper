@@ -1,5 +1,11 @@
 # spoolman-klipper-helper
 
+[![licence](https://img.shields.io/badge/licence-AGPL--3.0-blue)](LICENSE)
+[![release](https://img.shields.io/github/v/release/Bespok3d/spoolman-klipper-helper)](https://github.com/Bespok3d/spoolman-klipper-helper/releases)
+[![version](https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Fraw.githubusercontent.com%2FBespok3d%2Fspoolman-klipper-helper%2Fmain%2Fspoolman%2Fmanifest.json&query=%24.version&label=version&color=blue)](spoolman/manifest.json)
+![printer](https://img.shields.io/badge/printer-Snapmaker%20U1-informational)
+![stock firmware](https://img.shields.io/badge/stock%20firmware-no%20flashing-brightgreen)
+
 Zero-config Spoolman: active spool always tracked.
 
 A solo Bespok3d plugin repo: it ships one plugin (`spoolman`) and publishes a single index atom into `Bespok3d/main-index/atoms/`.
@@ -62,3 +68,8 @@ not, see <https://www.gnu.org/licenses/>. The full text is in [LICENSE](LICENSE)
 
 Bespok3d is a project of the Bespok3d Organisation, which is not a legal entity. Copyright is held by
 the individual authors named above.
+
+## Support this project
+
+Bespok3d is built and maintained in the open, on stock printer firmware. If it saved you an
+afternoon, you can [buy me a coffee](https://buymeacoffee.com/unlucio).
