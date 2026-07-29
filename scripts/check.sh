@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# SPDX-FileCopyrightText: Copyright (C) 2026 unlucio and the Bespok3d contributors
+# SPDX-License-Identifier: AGPL-3.0-or-later
 # This plugin's own gate: it must pass from this repo's root, with no sibling repo cloned except
 # lib_bespok3d. Exits non-zero on any failure.
 set -uo pipefail
