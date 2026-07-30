@@ -1,5 +1,12 @@
 import sys
+import types
 from pathlib import Path
+
+# Klipper's own `gcode` module only exists on the printer, and the plugin imports it at module
+# level for its CommandError. Stub it here so every test module can import the real plugin code.
+_gcode_stub = types.ModuleType("gcode")
+_gcode_stub.CommandError = type("CommandError", (Exception,), {})
+sys.modules.setdefault("gcode", _gcode_stub)
 
 EXTRAS = (
     Path(__file__).resolve().parent.parent

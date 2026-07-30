@@ -6,80 +6,12 @@ command raised TypeError before any request went out. Nothing exercised the comm
 141 tests stayed green over it. These tests drive the REAL Spoolman method through the REAL
 command handler, so an arity drift between the two files fails here.
 """
-import sys
 import types
 
-_gcode_stub = types.ModuleType("gcode")
-_gcode_stub.CommandError = type("CommandError", (Exception,), {})
-sys.modules.setdefault("gcode", _gcode_stub)
-
-from spoolman.commands import Commands  # noqa: E402  (the gcode stub must exist before this import)
-from spoolman.spoolman import Spoolman  # noqa: E402
-
-
-class RecordingGcode:
-    def __init__(self):
-        self.commands = {}
-        self.responses = []
-
-    def register_command(self, name, handler, desc=""):
-        self.commands[name] = handler
-
-    def respond_info(self, message):
-        self.responses.append(message)
-
-
-class FakeReactor:
-    NEVER = 9e99
-
-    def __init__(self):
-        self.timers = []
-
-    def monotonic(self):
-        return 0.0
-
-    def register_timer(self, callback, when):
-        self.timers.append((callback, when))
-
-
-class RecordingWebhooks:
-    def __init__(self, printer):
-        self.printer = printer
-        self.endpoints = {}
-        self.remote_calls = []
-
-    def register_endpoint(self, path, handler):
-        self.endpoints[path] = handler
-
-    def call_remote_method(self, method, **params):
-        self.remote_calls.append((method, params))
-
-
-class FakePrinter:
-    def __init__(self):
-        self.reactor = FakeReactor()
-        self.objects = {"gcode": RecordingGcode()}
-        self.objects["webhooks"] = RecordingWebhooks(self)
-
-    def lookup_object(self, name, default=KeyError):
-        if name in self.objects:
-            return self.objects[name]
-        if default is KeyError:
-            raise KeyError(name)
-        return default
-
-    def get_reactor(self):
-        return self.reactor
-
-
-class RecordingLogs:
-    def __init__(self):
-        self.lines = []
-
-    def _record(self, message):
-        self.lines.append(message)
-
-    log = warn = error = verbose = debug = _record
+import gcode
+from klipper_fakes import FakePrinter, RecordingLogs, RecordingWebhooks, drain_timers
+from spoolman.commands import Commands
+from spoolman.spoolman import Spoolman
 
 
 class FakeGcmd:
@@ -129,14 +61,8 @@ class NotYetConnectedWebhooks(RecordingWebhooks):
     def call_remote_method(self, method, **params):
         if self.failures > 0:
             self.failures -= 1
-            raise _gcode_stub.CommandError(f"Remote method '{method}' not registered")
+            raise gcode.CommandError(f"Remote method '{method}' not registered")
         super().call_remote_method(method, **params)
-
-
-def _drain_timers(reactor):
-    while reactor.timers:
-        callback, _when = reactor.timers.pop(0)
-        callback(0.0)
 
 
 def test_set_active_spool_retries_until_moonraker_registers():
@@ -145,7 +71,7 @@ def test_set_active_spool_retries_until_moonraker_registers():
     printer.objects["webhooks"] = NotYetConnectedWebhooks(printer, failures=2)
     spoolman = Spoolman(printer, RecordingLogs())
     spoolman.set_active_spool(42)
-    _drain_timers(printer.reactor)
+    drain_timers(printer.reactor)
     assert printer.objects["webhooks"].remote_calls == [
         ("spoolman_set_active_spool", {"spool_id": 42})
     ]
@@ -158,6 +84,6 @@ def test_a_superseded_active_spool_retry_is_dropped():
     spoolman.set_active_spool(42)   # fails once, schedules a retry
     printer.objects["webhooks"].failures = 0
     spoolman.set_active_spool(55)   # newer set supersedes the pending retry
-    _drain_timers(printer.reactor)
+    drain_timers(printer.reactor)
     calls = printer.objects["webhooks"].remote_calls
     assert calls == [("spoolman_set_active_spool", {"spool_id": 55})]

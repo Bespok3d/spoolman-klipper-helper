@@ -18,9 +18,10 @@ reads), with zero patches to Klipper or Moonraker.
   AFC, the active spool always tracks whichever lane is actually mounted on the carrier: the
   switch lands at the toolchange itself (before the prime purge), an eject clears it, and a
   resync that re-touches every lane (e.g. `DETECT_SPOOLS`) never makes an unmounted lane active.
-- Manually picked spools survive restarts and reboots: picks persist on the printer and are
-  restored at startup, re-labelling the screen and AFC panel on their own. A tag that appears on
-  the lane in the meantime wins.
+- Spools survive restarts and reboots, tagged or not. A tagged lane's tag data is kept on the
+  printer and read back at startup, then resolved again; a manual pick on an untagged lane is kept
+  the same way and replayed, re-labelling the screen and AFC panel on its own. A tag that appears on
+  an untagged lane in the meantime wins over the older pick.
 - Optionally records which printer a spool is on, in Spoolman's location field (see
   [Where a spool is](#where-a-spool-is-location-tracking)).
 - Handles the U1's 32 virtual-tool system for jobs that need more than 4 filaments.
@@ -79,8 +80,8 @@ match wins. By default that order is `spool_id, uid, sku`:
 
 - **spool_id**: an explicit Spoolman spool id encoded on the tag.
 - **uid**: the tag's hardware UID, bound to a spool in Spoolman. This is how a tag the printer
-  cannot fully decode (including Snapmaker's encrypted tags) still gets tracked: once its UID is
-  bound to a spool, every later tap resolves straight to that spool.
+  cannot fully decode still gets tracked: once its UID is bound to a spool, every later tap
+  resolves straight to that spool.
 - **sku**: the tag's SKU matched against a filament's **Article Number** in Spoolman.
 
 You can change the order with the **Spool resolution order** setting. A bound UID is stored on the
@@ -94,6 +95,21 @@ additive and de-duplicated, and a spool's other fields are preserved. Re-randomi
   direct UID match. With it off, UIDs are only ever bound when you ask.
 - **Manual bind:** run `SH_BIND_CARD_UID CHANNEL={0..3} SPOOL=<id>` to bind the tag currently on a
   lane to a specific Spoolman spool. Handy to recover from a miss, or to register a tag up front.
+
+Both of these need the lane to be reporting a **stable** tag UID. Most tags have one. A tag that
+re-randomizes its UID on every tap does not, and binding it would be binding a number that never
+comes back, so `SH_BIND_CARD_UID` refuses with `No stable tag UID on channel <n>` instead. Matching
+by **Article Number** works either way (see
+[A tag Spoolman knows nothing about](#a-tag-spoolman-knows-nothing-about)).
+
+**Verified on a printer.** On a Snapmaker U1 running stock firmware, with two genuine Snapmaker
+spools, the firmware exposes each card's own hardware UID, and binding that UID to a spool in
+Spoolman makes the lane resolve by the card itself. With the filament's **Article Number** cleared
+in Spoolman, so no SKU match was possible, unloading and reloading the spool still resolved to the
+bound spool. Bind with `SH_BIND_CARD_UID CHANNEL=<lane> SPOOL=<spoolman id>`; the lane's own log
+line prints the card UID it is holding, so you can read it off there. Two spools on one firmware
+were tested: that is what those spools do, not a claim about every Snapmaker spool, and nothing is
+claimed about other vendors' tags.
 
 ## Where a spool is (location tracking)
 
@@ -177,10 +193,13 @@ slicer:
 - `READ_FILAMENT_ID TOOL={0..3}` reads the selected lane's spool tag, if any.
 - `GET_FILAMENT_ID TOOL={0..3}` prints the currently read tag for the selected lane.
 - `SH_BIND_CARD_UID CHANNEL={0..3} SPOOL=<id>` binds the tag currently on a lane to a Spoolman
-  spool, so the next tap of that tag resolves to it directly.
+  spool, so the next tap of that tag resolves to it directly. Needs the lane to be reporting a stable
+  tag UID; it says so when there is none.
 - `CLEAR_ACTIVE_SPOOL` clears the current active spool.
 - `CLEAR_ALL_SPOOLS` clears the selected spool for every tool, including RFID-tagged lanes.
-- `DETECT_SPOOLS` re-detects the loaded spools. A handy reset when spool state looks wrong.
+- `DETECT_SPOOLS` re-detects every loaded spool. It is the last line of defence when something did not
+  detect properly: it forces the detection again without you pulling the spool off the printer and
+  putting it back on.
 - `DUMP_SPOOLS` prints what the bridge knows about each lane (labelled `T0:`..`T3:`; an empty lane
   reads `empty`, a manually assigned one shows the spool).
 - `SH_CONFIG MODE=<auto|manual> LOGS=<level>` changes the module's behavior at runtime
@@ -204,9 +223,67 @@ slicer:
 - **This printer's name (Spoolman location)**: leave empty to use this printer's own name
   automatically; set it to override.
 
+## Limits worth knowing about
+
+Two things here regularly look like bugs and are not. Both sit in parts of the chain this plugin
+does not own.
+
+### The slicer only syncs to filaments it already ships
+
+Snapmaker Orca and OrcaSlicer have a **Sync Filament Information** button that reads what is loaded
+in each lane and picks a slicer filament to match. It reads the brand, the material and the colour
+from the printer. What it is allowed to pick from is the slicer's own **built-in** filament list: it
+will never select a filament you created yourself, however you name it.
+
+So a lane loaded with something the slicer ships (any Snapmaker filament, the Polymaker PLA family,
+and the generics) syncs to that exact entry. Anything else lands on `Generic <material>` with the
+right colour, because that is the nearest thing the slicer has. A lane it cannot place at all keeps
+whatever filament the project already had, and only its colour is updated.
+
+That is the slicer's own behaviour, on the slicer's side, and nothing Bespok3d installs changes it.
+If you want your own filament used, pick it by hand after syncing, or build your custom filament on
+top of the matching built-in one so the print settings are right either way.
+
+### A tag Spoolman knows nothing about
+
+Spools come back after a reboot on their own, tagged or not, so this section is only about a tag that
+matches nothing in your Spoolman.
+
+On a tagged lane the tag is the source of truth: its data is kept on the printer, read back at
+startup and resolved again. While it resolves, the lane comes back with the right spool and there is
+nothing to do. When it resolves to nothing, the lane comes back showing what the tag itself says but
+with no Spoolman spool behind it, so nothing is tracked against it. A spool you pick by hand for that
+lane is not kept either, because on a tagged lane the tag is what persists, so you pick it again
+after the next reboot.
+
+Give the tag something to land on, once, and it stops. Two routes, either of which is enough.
+
+- **Fill in the Article Number.** Put the SKU the tag reports into the filament's **Article Number**
+  in Spoolman and the SKU step of the chain finds it by itself, on every reboot. This is the route
+  for a tag that reports a SKU, which includes Snapmaker's own spools.
+- **Bind the tag to the spool.** `SH_BIND_CARD_UID CHANNEL={0..3} SPOOL=<id>` ties the tag currently
+  on a lane to one Spoolman spool. The binding is stored on the Spoolman spool, so it survives
+  reboots and follows the spool to any lane. It needs the lane to be reporting a stable tag UID, and
+  it tells you when there is none.
+
+Whenever a lane looks wrong for any other reason, `DETECT_SPOOLS` is the last line of defence: it
+re-reads every lane and resolves them again, so you can force the detection without rebooting and
+without pulling the spool off the printer and putting it back on. It is the retry, not the cure: if
+Spoolman genuinely has no filament matching that tag, `DETECT_SPOOLS` fails exactly the same way, and
+the two fixes above are what stop it for good.
+
 ## Troubleshooting
 
 - **Spool never goes active:** check the server address and that the printer can reach the
   Spoolman host and port.
 - **No usage logged:** usage is recorded per print; confirm a spool is active before the
   print starts.
+- **`filament lookup error for sku <n>: null` / `Cannot find spools for sku: <n>`:** Spoolman
+  answered, and it has no filament whose **Article Number** is that SKU. Fill that SKU into the
+  filament's **Article Number** in Spoolman. (`SH_BIND_CARD_UID` is the alternative.) See
+  [A tag Spoolman knows nothing about](#a-tag-spoolman-knows-nothing-about).
+- **`Tool T<n> loaded with UNKNOWN filament (unassigned, no tag)`:** that lane has filament and no
+  tag, and nothing has been picked for it yet. Pick a spool for it in the Spoolman panel; that pick
+  is remembered across reboots.
+- **`Clearing spool from extruder <n>`:** that lane is empty. Expected.
+- `SH_DEBUG SKU=<sku>` shows what a given SKU resolves to right now.

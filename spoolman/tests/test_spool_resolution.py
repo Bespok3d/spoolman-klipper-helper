@@ -1,9 +1,13 @@
 # ruff: noqa: PLR2004  Tests assert against literal spool ids and channel indexes.
 """Resolving holders to Spoolman ids, the tool->spool queries, and the UID-bind entry."""
+import json
 import types
 
+from klipper_fakes import FakePrinter, RecordingLogs, RecordingWebhooks
+from spoolman import card_uids
 from spoolman.spool_holders import SpoolHolders
 from spoolman.spool_resolution import SpoolResolution
+from spoolman.spoolman import Spoolman
 
 TAGGED = {
     "VENDOR": "ELEGOO", "MAIN_TYPE": "PLA", "SUB_TYPE": "Matte",
@@ -14,16 +18,6 @@ SPOOLMAN_SPOOL = {
     "filament": {"name": "PLA Matte", "material": "PLA", "color_hex": "1D6C6A",
                  "vendor": {"name": "ELEGOO"}},
 }
-
-
-class RecordingLogs:
-    def __init__(self):
-        self.lines = []
-
-    def _record(self, message):
-        self.lines.append(message)
-
-    log = warn = error = verbose = debug = _record
 
 
 class RecordingMacros:
@@ -194,3 +188,103 @@ def test_bind_channel_card_uid_rejects_an_out_of_range_channel():
     resolution.bind_channel_card_uid(9, 42)
     assert helper.spoolman.bound_uids == []
     assert any("Channel must be" in line for line in helper.logs.lines)
+
+
+# The strategy chain itself, driven end to end through the REAL Spoolman against a fake
+# Spoolman server. Everything above stubs `resolve_spool`, so the order of the chain
+# (`spool_id`, then `uid`, then `sku`) had never actually run. A stock Snapmaker tag is the case
+# that depends on it: the firmware's filament struct has no SPOOL_ID field, so the tag arrives
+# carrying only a card UID and a SKU, and the UID has to win.
+
+SNAPMAKER_UID_BYTES = [0x04, 0x5B, 0x2C, 0x71, 0x9A, 0x30, 0x80]
+SNAPMAKER_UID_HEX = "045b2c719a3080"
+SNAPMAKER_SKU = "sm-pla-basic-black"
+
+STOCK_SNAPMAKER_TAG = {
+    "VENDOR": "Snapmaker", "MAIN_TYPE": "PLA", "SUB_TYPE": "Basic",
+    "ARGB_COLOR": "1D1D1DFF", "SKU": SNAPMAKER_SKU,
+    "CARD_UID": SNAPMAKER_UID_BYTES,
+}
+UID_BOUND_SPOOL = {
+    "id": 77,
+    "extra": {card_uids.CARD_UIDS_FIELD: json.dumps(json.dumps([SNAPMAKER_UID_HEX]))},
+}
+SKU_MATCHED_SPOOL = {"id": 31}
+SPOOLMAN_SERVER = {
+    ("/api/v1/spool", ""): [SKU_MATCHED_SPOOL, UID_BOUND_SPOOL],
+    ("/api/v1/filament", f"article_number={SNAPMAKER_SKU}"): [{"id": 9}],
+    ("/api/v1/spool", "filament.id=9"): [SKU_MATCHED_SPOOL],
+}
+
+
+class FakeWebRequest:
+    """What Moonraker hands back to the plugin's callback endpoint."""
+
+    def __init__(self, endpoint, payload):
+        self.method = endpoint
+        self.params = {"payload": payload, "error": None}
+        self.sent = []
+
+    def send(self, response):
+        self.sent.append(response)
+
+
+class SpoolmanServerWebhooks(RecordingWebhooks):
+    """A webhooks that answers a spoolman_proxy call the way the Moonraker proxy would."""
+
+    def __init__(self, printer, spools_by_request):
+        super().__init__(printer)
+        self.spools_by_request = spools_by_request
+        self.requested = []
+
+    def call_remote_method(self, method, **params):
+        super().call_remote_method(method, **params)
+        if method != "spoolman_proxy":
+            return
+        request = (params["path"], params["query"])
+        self.requested.append(request)
+        payload = self.spools_by_request.get(request, [])
+        self.endpoints[params["cb_endpoint"]](FakeWebRequest(params["cb_endpoint"], payload))
+
+
+def resolve_through_real_chain(info, spools_by_request=None):
+    printer = FakePrinter()
+    webhooks = SpoolmanServerWebhooks(printer, spools_by_request or SPOOLMAN_SERVER)
+    printer.objects["webhooks"] = webhooks
+    spoolman = Spoolman(printer, RecordingLogs())
+    resolved = []
+    spoolman.resolve_spool(info, resolved.append)
+    return resolved, webhooks.requested
+
+
+def test_a_stock_snapmaker_tag_resolves_by_its_card_uid_before_its_sku():
+    resolved, requested = resolve_through_real_chain(STOCK_SNAPMAKER_TAG)
+    assert resolved == [UID_BOUND_SPOOL]
+    assert ("/api/v1/filament", f"article_number={SNAPMAKER_SKU}") not in requested
+
+
+def test_a_tag_whose_uid_is_bound_to_nothing_falls_through_to_its_sku():
+    resolved, requested = resolve_through_real_chain(
+        {**STOCK_SNAPMAKER_TAG, "CARD_UID": [0x04, 0x11, 0x22, 0x33]})
+    assert resolved == [SKU_MATCHED_SPOOL]
+    assert ("/api/v1/filament", f"article_number={SNAPMAKER_SKU}") in requested
+
+
+def test_a_card_that_failed_the_firmware_signature_check_still_resolves_by_sku():
+    # A card the firmware refuses to parse arrives on the blank template, UID all zeroes.
+    resolved, _requested = resolve_through_real_chain(
+        {**STOCK_SNAPMAKER_TAG, "CARD_UID": [0, 0, 0, 0]})
+    assert resolved == [SKU_MATCHED_SPOOL]
+
+
+def test_a_re_randomized_uid_is_never_used_as_the_key():
+    # NXP AN10927: a UID starting 0x08 is re-randomized per tap, so it identifies nothing.
+    resolved, _requested = resolve_through_real_chain(
+        {**STOCK_SNAPMAKER_TAG, "CARD_UID": [0x08, 0x5B, 0x2C, 0x71]})
+    assert resolved == [SKU_MATCHED_SPOOL]
+
+
+def test_a_spool_id_on_the_tag_still_wins_over_both():
+    resolved, requested = resolve_through_real_chain({**STOCK_SNAPMAKER_TAG, "SPOOL_ID": 104})
+    assert resolved == [104]
+    assert requested == []

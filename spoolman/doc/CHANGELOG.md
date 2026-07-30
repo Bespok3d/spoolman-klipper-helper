@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.1.30
+
+- Every lane line now also prints the card's own UID, in hex, next to the spool it resolved to, so you
+  can read the UID straight off the console and bind it with
+  `SH_BIND_CARD_UID CHANNEL={0..3} SPOOL=<id>` instead of digging it out of the firmware. A lane whose
+  tag has no usable UID (none at all, or one that changes on every tap) says nothing extra, because
+  there is nothing there to bind.
+- Doc: the page now records what was checked on a real printer (Snapmaker U1 on stock firmware, two
+  genuine Snapmaker spools: binding the card UID makes the lane resolve by the card, with the Article
+  Number cleared so no SKU match was possible), and adds a "Limits worth knowing about" section
+  covering the slicer's own sync behaviour and what to do about a tag Spoolman knows nothing about.
+
 ## 0.1.29
 
 - Fix: a manual tool change while the printer is idle no longer prints a phantom "Cannot resolve

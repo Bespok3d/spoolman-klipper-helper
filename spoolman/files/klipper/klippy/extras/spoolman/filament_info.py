@@ -5,9 +5,11 @@ Spoolman spool) is labelled UNKNOWN here rather than the firmware's raw "NONE": 
 unidentified, not absent. This naming lives ONLY in our logs/labels; the firmware's
 print_task_config keeps "NONE" as its own sentinel for "not edited", which it relies on.
 """
+from .card_uids import trackable_uid
+
 UNKNOWN_DESCRIPTOR = "UNKNOWN"
 UNTAGGED_VENDORS = ("NONE", "Generic")
-KNOWN_KEYS = {"VENDOR", "MAIN_TYPE", "SUB_TYPE", "ARGB_COLOR", "SPOOL_ID", "SKU"}
+KNOWN_KEYS = {"VENDOR", "MAIN_TYPE", "SUB_TYPE", "ARGB_COLOR", "SPOOL_ID", "SKU", "CARD_UID"}
 
 RGB_MASK = 0xFFFFFF
 RGB_HEX_LENGTH = 6
@@ -114,4 +116,15 @@ def _summary(filament_info):
     colour = friendly_colour(filament_info.get("ARGB_COLOR"))
     spool_id = filament_info.get("SPOOL_ID")
     sku = filament_info.get("SKU")
-    return f"{descriptor} (colour: {colour}, Spoolman id: {spool_id}, sku: {sku})"
+    uid_clause = _card_uid_clause(filament_info)
+    return f"{descriptor} (colour: {colour}, Spoolman id: {spool_id}, sku: {sku}{uid_clause})"
+
+
+# The tag's own hardware UID, so a person reading the lane line can bind it to a Spoolman spool
+# (SH_BIND_CARD_UID) without digging it out of the firmware. Says nothing for a tag with no UID,
+# or a re-randomized one, since neither can be bound.
+def _card_uid_clause(filament_info):
+    card_uid = trackable_uid(filament_info.get("CARD_UID"))
+    if not card_uid:
+        return ""
+    return f", card uid: {card_uid}"

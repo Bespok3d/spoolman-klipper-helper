@@ -1,5 +1,5 @@
 """Regression tests for how a tracked spool is labelled (UNKNOWN vs identified) and its colour."""
-from filament_info import (
+from spoolman.filament_info import (
     filament_descriptor,
     filament_info_to_string,
     friendly_colour,
@@ -27,6 +27,21 @@ def test_untagged_loaded_spool_is_just_unknown_with_no_colour_or_ids():
     assert filament_descriptor(UNTAGGED_LOADED) == "UNKNOWN"
     # No firmware-default colour / null spool id / sku noise -- present but unidentified.
     assert filament_info_to_string(UNTAGGED_LOADED) == "UNKNOWN"
+
+
+def test_lane_line_shows_the_tag_card_uid_in_hex_so_it_can_be_bound():
+    tagged_with_uid = {**TAGGED, "CARD_UID": [0xE0, 0xCE, 0x1E, 0x3F]}
+    assert filament_info_to_string(tagged_with_uid) == (
+        "ELEGOO PLA Matte (colour: #1D6C6A (teal), Spoolman id: 104, sku: abc, "
+        "card uid: e0ce1e3f)"
+    )
+
+
+def test_lane_line_says_nothing_about_a_uid_when_the_tag_has_none():
+    assert filament_info_to_string({**TAGGED, "CARD_UID": [0, 0, 0, 0]}) == (
+        "ELEGOO PLA Matte (colour: #1D6C6A (teal), Spoolman id: 104, sku: abc)"
+    )
+    assert "card uid" not in filament_info_to_string(TAGGED)
 
 
 def test_generic_vendor_is_treated_as_unknown():
