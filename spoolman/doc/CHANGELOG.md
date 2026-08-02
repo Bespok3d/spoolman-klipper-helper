@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.1.31
+
+- Fix: a tag bound by another app that writes the same `card_uids` field now resolves here however
+  that app spelled the UID: any letter case, `:` or `-` between the bytes, the bytes spaced apart, a
+  leading `0x`, a list or one comma-separated value. Every spelling is read as the one tag it is, so
+  the same physical tag no longer reads as two different tags and binding it again adds no duplicate.
+  A UID we write back is always stored bare and lowercase, whatever it looked like before.
+- New setting, **How tag UIDs are stored in Spoolman**: `array` (the default, a proper list) or
+  `comma_separated`, for when another app reading this field cannot handle a list. Either form is
+  read back correctly here, so the choice only affects what other readers see.
+
 ## 0.1.30
 
 - Every lane line now also prints the card's own UID, in hex, next to the spool it resolved to, so you
@@ -262,7 +273,10 @@
   Every NTAG (and any keyless proprietary tag the reader surfaces by UID) can be bound to a
   Spoolman spool through a `card_uids` extra field, so even tags we can't fully decode are tracked
   once bound. The field name is `card_uids` on purpose: it is the same field a companion mobile app
-  writes, so a binding made on either side is read by both. A spool has two sides / two tags, so
+  writes, and we read what that app stores however it spelled it, so a binding made there resolves
+  here (see 0.1.31). The reverse is not guaranteed: our value is a JSON array inside the JSON string
+  Spoolman requires of a text field, which a reader that only splits on commas does not decode, and
+  0.1.31 adds a setting for that reader. A spool has two sides / two tags, so
   `card_uids` is a LIST of UIDs; binding appends a UID only if it is not already assigned to any
   spool (no duplicates), and a lookup that hits more than one spool takes the first. A configurable
   resolution order (`card_uids_strategy`, default `spool_id,uid,sku`, first match wins) picks which

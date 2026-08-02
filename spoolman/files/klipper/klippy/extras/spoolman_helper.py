@@ -38,7 +38,8 @@ class SpoolmanHelper:
         self.logs = Logs(self.printer, self)
         self.u1_tools = U1Tools(config, self.logs)
         self.spoolman = Spoolman(
-            self.printer, self.logs, options.card_uids_strategy, options.card_uids_auto_register
+            self.printer, self.logs, options.card_uids_strategy, options.card_uids_auto_register,
+            options.card_uids_write_form
         )
         self.macros = Macros(self.printer, self.logs)
         self.commands = Commands(self.printer, self.logs, self)

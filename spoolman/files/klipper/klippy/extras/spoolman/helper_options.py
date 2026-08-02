@@ -3,7 +3,7 @@
 Every read tolerates a bare printer object in place of a Klipper config wrapper (the test
 benches construct the helper that way), falling back to the option's default.
 """
-from .card_uids import parse_strategy_chain
+from .card_uids import parse_strategy_chain, parse_write_form
 
 TRUTHY = ("true", "1", "on", "yes")
 POSSIBLE_MODES = ("manual", "auto")
@@ -34,3 +34,4 @@ class HelperOptions:
         self.location = read_text(config, "location")
         self.card_uids_strategy = parse_strategy_chain(_read_raw(config, "card_uids_strategy", ""))
         self.card_uids_auto_register = read_flag(config, "card_uids_auto_register")
+        self.card_uids_write_form = parse_write_form(_read_raw(config, "card_uids_write_form", ""))

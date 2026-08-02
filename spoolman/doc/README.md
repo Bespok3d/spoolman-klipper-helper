@@ -86,7 +86,12 @@ match wins. By default that order is `spool_id, uid, sku`:
 
 You can change the order with the **Spool resolution order** setting. A bound UID is stored on the
 Spoolman spool in a `card_uids` field (a list, since a spool can carry two tags). That is the same
-field a companion mobile app writes, so a binding made on either side is shared. Bindings are
+field a companion mobile app writes, and we read what that app stores however it spelled it (any
+letter case, `:` or `-` between the bytes, the bytes spaced apart, a leading `0x`, a list or one
+comma-separated value), so a binding made there resolves here. **How tag UIDs are stored in
+Spoolman** picks what we write back: `array` (the default, a proper list) or `comma_separated` for
+an app on the other side that cannot read a list. A UID we store is always bare lowercase hex, and
+either form is read back correctly here. Bindings are
 additive and de-duplicated, and a spool's other fields are preserved. Re-randomizing tags
 (DESFire) are never used as a key.
 

@@ -15,13 +15,14 @@ EMPTY_SPOOL_IDS = (0, "0", "", None)
 
 class Spoolman:
     def __init__(self, printer, logs, strategy_chain=card_uids.DEFAULT_STRATEGY,
-                 auto_register=False):
+                 auto_register=False, write_form=card_uids.DEFAULT_WRITE_FORM):
         self.printer = printer
         self.logs = logs
         self.gcode = self.printer.lookup_object("gcode")
         self.webhooks = self.printer.lookup_object("webhooks")
         self.strategy_chain = tuple(strategy_chain)
         self.auto_register = auto_register
+        self.write_form = write_form
         self._active_spool_epoch = 0
 
     def set_active_spool(self, spool_id):
@@ -202,7 +203,7 @@ class Spoolman:
         self._patch_card_uids(spool_id, uid, target, on_done)
 
     def _patch_card_uids(self, spool_id, uid, spool, on_done):
-        extra = card_uids.merged_extra_with_card_uids(spool, uid)
+        extra = card_uids.merged_extra_with_card_uids(spool, uid, self.write_form)
 
         def on_patched(error, payload):
             if error:

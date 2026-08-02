@@ -9,15 +9,20 @@ the GET-merge-PATCH extra builder (preserves other fields), and the strategy-cha
 import json
 
 from card_uids import (
+    ARRAY_WRITE_FORM,
     CARD_UIDS_FIELD,
+    COMMA_SEPARATED_WRITE_FORM,
     DEFAULT_STRATEGY,
+    canonical_uid,
     card_uids_field_definition,
+    encode_card_uids,
     find_spool_by_id,
     is_random_uid,
     match_spool_by_card_uid,
     merged_extra_with_card_uids,
     normalize_uid,
     parse_strategy_chain,
+    parse_write_form,
     spool_card_uids,
     spool_has_card_uid,
     trackable_uid,
@@ -26,6 +31,7 @@ from card_uids import (
 GENUINE_UID = [0x04, 0xA1, 0xB2, 0xC3]
 GENUINE_HEX = "04a1b2c3"
 RANDOM_UID = [0x08, 0x11, 0x22, 0x33]
+OTHER_SIDE_HEX = "cafebabe"  # a spool has 2 sides, so its other side's tag is a second UID
 
 
 def _spool(spool_id, extra):
@@ -70,7 +76,9 @@ def test_spool_card_uids_tolerates_legacy_forms():
     two_tags = _spool(1, {CARD_UIDS_FIELD: json.dumps([GENUINE_HEX, "deadbeef"])})
     assert spool_card_uids(two_tags) == [GENUINE_HEX, "deadbeef"]
     assert spool_card_uids(_spool(1, {CARD_UIDS_FIELD: GENUINE_HEX})) == [GENUINE_HEX]
-    assert spool_card_uids(_spool(1, {CARD_UIDS_FIELD: "aa, bb cc"})) == ["aa", "bb", "cc"]
+    assert spool_card_uids(
+        _spool(1, {CARD_UIDS_FIELD: f"{GENUINE_HEX}, deadbeef 11223344"})
+    ) == [GENUINE_HEX, "deadbeef", "11223344"]
     assert spool_card_uids(_spool(1, {CARD_UIDS_FIELD: json.dumps([])})) == []
     assert spool_card_uids(_spool(1, {})) == []
     assert spool_card_uids({}) == []
@@ -81,6 +89,69 @@ def test_spool_has_card_uid():
     assert spool_has_card_uid(spool, GENUINE_HEX) is True
     assert spool_has_card_uid(spool, "nope") is False
     assert spool_has_card_uid(spool, None) is False
+
+
+def test_uid_bound_by_another_writer_in_uppercase_still_matches():
+    # What another writer of this same field leaves in Spoolman: uppercase hex, comma-separated,
+    # inside a single JSON string. Our scanner renders every UID lowercase, and the same physical
+    # tag must still resolve to its spool.
+    spool = _spool(7, {CARD_UIDS_FIELD: json.dumps("AABBCCDD,11223344")})
+    assert spool_card_uids(spool) == ["aabbccdd", "11223344"]
+    assert spool_has_card_uid(spool, "aabbccdd") is True
+    assert match_spool_by_card_uid([spool], "aabbccdd")["id"] == 7
+    assert spool_has_card_uid(spool, "aabbccde") is False
+
+
+def test_every_spelling_of_one_uid_is_the_same_uid():
+    # The shapes other apps actually leave in this field for the single tag 04a1b2c3.
+    for spelled in (
+        "04A1B2C3", "04:a1:b2:c3", "04-A1-B2-C3", "0x04a1b2c3", "04 a1 b2 c3", "  04a1b2c3  ",
+    ):
+        assert canonical_uid(spelled) == GENUINE_HEX
+        spool = _spool(7, {CARD_UIDS_FIELD: json.dumps(spelled)})
+        assert spool_card_uids(spool) == [GENUINE_HEX]
+        assert spool_has_card_uid(spool, GENUINE_HEX) is True
+
+
+def test_punctuated_uids_are_still_told_apart():
+    # A comma always separates two UIDs, and a token as wide as a whole UID is one of its own.
+    spool = _spool(7, {CARD_UIDS_FIELD: json.dumps("04:A1:B2:C3, DE-AD-BE-EF")})
+    assert spool_card_uids(spool) == [GENUINE_HEX, "deadbeef"]
+    assert spool_has_card_uid(spool, "deadbeef") is True
+    spaced_bytes_of_two = _spool(7, {CARD_UIDS_FIELD: json.dumps("04 a1 b2 c3, de ad be ef")})
+    assert spool_card_uids(spaced_bytes_of_two) == [GENUINE_HEX, "deadbeef"]
+
+
+def test_a_punctuated_binding_is_rewritten_canonical_not_duplicated():
+    spool = _spool(7, {CARD_UIDS_FIELD: json.dumps("04:A1:B2:C3")})
+    merged = merged_extra_with_card_uids(spool, GENUINE_HEX)
+    assert json.loads(json.loads(merged[CARD_UIDS_FIELD])) == [GENUINE_HEX]
+
+
+def test_write_form_default_is_the_array():
+    spool = _spool(7, {CARD_UIDS_FIELD: _wire([GENUINE_HEX])})
+    merged = merged_extra_with_card_uids(spool, "deadbeef")
+    assert merged[CARD_UIDS_FIELD] == _wire([GENUINE_HEX, "deadbeef"])
+
+
+def test_comma_separated_write_form_is_flat_and_still_reads_back():
+    spool = _spool(7, {CARD_UIDS_FIELD: _wire([GENUINE_HEX])})
+    merged = merged_extra_with_card_uids(spool, "deadbeef", COMMA_SEPARATED_WRITE_FORM)
+    assert merged[CARD_UIDS_FIELD] == json.dumps(f"{GENUINE_HEX},deadbeef")
+    assert spool_card_uids(_spool(7, merged)) == [GENUINE_HEX, "deadbeef"]
+
+
+def test_unknown_write_form_writes_the_array():
+    assert parse_write_form("yolo") == ARRAY_WRITE_FORM
+    assert parse_write_form("") == ARRAY_WRITE_FORM
+    assert parse_write_form(" COMMA_SEPARATED ") == COMMA_SEPARATED_WRITE_FORM
+    assert encode_card_uids([GENUINE_HEX], "yolo") == _wire([GENUINE_HEX])
+
+
+def test_merged_extra_does_not_append_an_uppercase_duplicate():
+    spool = _spool(7, {CARD_UIDS_FIELD: json.dumps("AABBCCDD")})
+    merged = merged_extra_with_card_uids(spool, "aabbccdd")
+    assert json.loads(json.loads(merged[CARD_UIDS_FIELD])) == ["aabbccdd"]
 
 
 def test_match_spool_by_card_uid_array_membership():
@@ -128,15 +199,15 @@ def test_merged_extra_value_passes_spoolman_text_validation():
 
 
 def test_merged_extra_appends_second_tag():
-    spool = _spool(5, {CARD_UIDS_FIELD: _wire(["sideA"])})
+    spool = _spool(5, {CARD_UIDS_FIELD: _wire([OTHER_SIDE_HEX])})
     merged = merged_extra_with_card_uids(spool, GENUINE_HEX)
-    assert merged[CARD_UIDS_FIELD] == _wire(["sideA", GENUINE_HEX])
+    assert merged[CARD_UIDS_FIELD] == _wire([OTHER_SIDE_HEX, GENUINE_HEX])
 
 
 def test_merged_extra_migrates_legacy_single_encoded_value():
-    spool = _spool(5, {CARD_UIDS_FIELD: json.dumps(["sideA"])})
+    spool = _spool(5, {CARD_UIDS_FIELD: json.dumps([OTHER_SIDE_HEX])})
     merged = merged_extra_with_card_uids(spool, GENUINE_HEX)
-    assert merged[CARD_UIDS_FIELD] == _wire(["sideA", GENUINE_HEX])
+    assert merged[CARD_UIDS_FIELD] == _wire([OTHER_SIDE_HEX, GENUINE_HEX])
 
 
 def test_merged_extra_does_not_append_duplicate():

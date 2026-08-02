@@ -1,7 +1,7 @@
 {
   "name": "spoolman",
   "title": "Spoolman Bridge",
-  "version": "0.1.30",
+  "version": "0.1.31",
   "author": "bespoked",
   "min_daemon_version": "0.10.1-dev",
   "description": "Spoolman for the U1 multi-tool: the active spool follows the tag the printer reads or the spool you pick, color and material reach the screen and AFC panel, tags are matched by their hardware UID, and you can record which printer each spool is on. Filament length per print is logged automatically.",
@@ -171,6 +171,19 @@
       ],
       "default": "false",
       "hint": "Opt-in (off by default). When on, a spool found by SKU that has no UID yet gets the current tag's UID written onto it in Spoolman, so the next tap is a direct UID match. Off means tags are only ever bound on your explicit request (SH_BIND_CARD_UID).",
+      "userEditable": true,
+      "scope": "global"
+    },
+    {
+      "key": "CARD_UIDS_WRITE_FORM",
+      "label": "How tag UIDs are stored in Spoolman",
+      "type": "select",
+      "options": [
+        "array",
+        "comma_separated"
+      ],
+      "default": "array",
+      "hint": "array: a proper list, the right shape and the default. comma_separated: the same UIDs flattened into one comma-separated value, for when another app reading this field cannot handle a list. Either form is read back correctly here.",
       "userEditable": true,
       "scope": "global"
     },

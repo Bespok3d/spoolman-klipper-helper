@@ -1,5 +1,5 @@
 """The [spoolman_helper] section options: defaults, coercions, and the bare-printer fallback."""
-from spoolman.card_uids import DEFAULT_STRATEGY
+from spoolman.card_uids import ARRAY_WRITE_FORM, COMMA_SEPARATED_WRITE_FORM, DEFAULT_STRATEGY
 from spoolman.helper_options import HelperOptions, read_flag, read_mode, read_text
 
 
@@ -23,6 +23,7 @@ def test_defaults_from_an_empty_section():
     assert options.location == ""
     assert options.card_uids_strategy == tuple(DEFAULT_STRATEGY)
     assert options.card_uids_auto_register is False
+    assert options.card_uids_write_form == ARRAY_WRITE_FORM
 
 
 def test_bare_printer_object_yields_all_defaults():
@@ -40,6 +41,7 @@ def test_configured_section_is_read_through():
         "location": " unU1 ",
         "card_uids_strategy": "uid,sku",
         "card_uids_auto_register": "TRUE",
+        "card_uids_write_form": " Comma_Separated ",
     }))
     assert options.mode == "manual"
     assert options.logging == "debug"
@@ -47,6 +49,12 @@ def test_configured_section_is_read_through():
     assert options.location == "unU1"
     assert options.card_uids_strategy == ("uid", "sku")
     assert options.card_uids_auto_register is True
+    assert options.card_uids_write_form == COMMA_SEPARATED_WRITE_FORM
+
+
+def test_unknown_write_form_falls_back_to_the_array():
+    options = HelperOptions(FakeConfig({"card_uids_write_form": "yolo"}))
+    assert options.card_uids_write_form == ARRAY_WRITE_FORM
 
 
 def test_unknown_mode_falls_back_to_auto():
