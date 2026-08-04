@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.1.32
+
+- A Spoolman published over https, or behind a name on the standard web port, can now be used: the
+  server address is taken whole, protocol and all, and written to Moonraker exactly as you typed it.
+  Typing just a host and port asks you which protocol to use. Addresses already saved keep working
+  unchanged.
+
 ## 0.1.31
 
 - Fix: a tag bound by another app that writes the same `card_uids` field now resolves here however

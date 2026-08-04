@@ -57,8 +57,10 @@ The SKU trick works with any tag the U1 can read that carries such a property.
 
 1. Install this plugin from the Bespok3d store. It pulls in the **RFID Spool Reader**
    automatically.
-2. When prompted, enter your **Spoolman server address** as `host:port` (e.g.
-   `192.168.1.50:8000`). That is the only required setting.
+2. When prompted, enter your **Spoolman server address** whole, protocol and all: a name over https
+   (`https://spoolman.example.org`) or a host and port over http (`http://192.168.1.50:8000`). If you
+   type just the host and port, the app asks which of the two to use. That is the only required
+   setting.
 3. The bridge starts syncing immediately; no config files to edit.
 
 ### Show the Spoolman panel in Fluidd

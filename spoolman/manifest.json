@@ -1,7 +1,7 @@
 {
   "name": "spoolman",
   "title": "Spoolman Bridge",
-  "version": "0.1.31",
+  "version": "0.1.32",
   "author": "bespoked",
   "min_daemon_version": "0.10.1",
   "description": "Spoolman for the U1 multi-tool: the active spool follows the tag the printer reads or the spool you pick, color and material reach the screen and AFC panel, tags are matched by their hardware UID, and you can record which printer each spool is on. Filament length per print is logged automatically.",
@@ -13,7 +13,7 @@
   "homepage": "https://github.com/bespok3d-org/plugin-spoolman",
   "changelog": "doc/CHANGELOG.md",
   "published_at": "2025-09-20",
-  "updated_at": "2026-07-03",
+  "updated_at": "2026-08-04",
   "publisher": "PLACEHOLDER",
   "provides": [
     {
@@ -82,7 +82,7 @@
     "variables": [
       {
         "name": "SPOOLMAN_SERVER",
-        "description": "Spoolman server address with port, e.g. 192.168.1.50:8000",
+        "description": "Whole Spoolman address, protocol and all, e.g. https://spoolman.example.org or http://192.168.1.50:8000",
         "required": true
       },
       {
@@ -115,9 +115,9 @@
     {
       "key": "SPOOLMAN_SERVER",
       "label": "Spoolman server address",
-      "type": "text",
-      "placeholder": "192.168.1.50:8000",
-      "hint": "Host or host:port of your Spoolman instance.",
+      "type": "url",
+      "placeholder": "https://spoolman.example.org",
+      "hint": "The whole address of your Spoolman, protocol and all: a name over https, or http and a host and port.",
       "required": true,
       "userEditable": true,
       "scope": "global"
