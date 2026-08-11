@@ -35,6 +35,9 @@ npx b3-builder build --source ./spoolman --atom-repo Bespok3d/spoolman-klipper-h
 # -> dist/spoolman-<ver>.b3 + dist/spoolman.atom.json
 ```
 
+Writing a plugin of your own? Start at the plugin documentation:
+[Bespok3d/b3-builder/doc](https://github.com/Bespok3d/b3-builder/tree/main/doc).
+
 ## Releasing
 
 Bump `spoolman/manifest.json` `version` and push the tag `plugin-<name>-v<version>` naming that
