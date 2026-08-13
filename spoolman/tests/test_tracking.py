@@ -113,7 +113,7 @@ def build_tracking(extruder_map=None, track_location=False, location=""):
     logs = RecordingLogs()
     macros = RecordingMacros()
     spoolman = RecordingSpoolman()
-    writer = PrintTaskWriter(printer, logs, macros)
+    writer = PrintTaskWriter(printer, logs, macros, False)
     helper = FakeHelper(printer, logs, macros, writer, spoolman)
     tracking = SpoolTracking(helper, track_location=track_location, location=location)
     return tracking, spoolman, macros, logs

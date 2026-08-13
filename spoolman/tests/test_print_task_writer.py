@@ -23,6 +23,16 @@ SPOOL = {
     },
 }
 
+SNAPMAKER_SPOOL = {
+    "id": 43,
+    "filament": {
+        "name": "PLA Black",
+        "material": "PLA",
+        "color_hex": "101010",
+        "vendor": {"name": "Snapmaker"},
+    },
+}
+
 EXPECTED_GCODE = (
     'SET_PRINT_FILAMENT_CONFIG CONFIG_EXTRUDER=3 VENDOR="FlashForge" '
     'FILAMENT_TYPE="PLA" FILAMENT_SUBTYPE="" FILAMENT_COLOR_RGBA=3FD2C5FF'
@@ -70,9 +80,10 @@ def empty_task_config():
     }
 
 
-def build_writer(task_config):
+def build_writer(task_config, force_generic_vendor=False):
     macros = RecordingMacros()
-    writer = PrintTaskWriter(FakePrinter(task_config), RecordingLogs(), macros)
+    writer = PrintTaskWriter(
+        FakePrinter(task_config), RecordingLogs(), macros, force_generic_vendor)
     return writer, macros
 
 
@@ -84,7 +95,7 @@ def test_normalize_color_rgba():
 
 
 def test_filament_config_args_carry_the_firmware_required_trio():
-    args = filament_config_args_from_spool(SPOOL, 3)
+    args = filament_config_args_from_spool(SPOOL, 3, False)
     assert args["VENDOR"] == "FlashForge"
     assert args["FILAMENT_TYPE"] == "PLA"
     assert args["FILAMENT_SUBTYPE"] == ""  # required together with FILAMENT_TYPE
@@ -92,7 +103,7 @@ def test_filament_config_args_carry_the_firmware_required_trio():
 
 
 def test_set_print_filament_config_gcode_quotes_and_strips_unsafe():
-    gcode = set_print_filament_config_gcode(filament_config_args_from_spool(SPOOL, 3))
+    gcode = set_print_filament_config_gcode(filament_config_args_from_spool(SPOOL, 3, False))
     assert gcode == EXPECTED_GCODE
     injected = {"CONFIG_EXTRUDER": "1", "VENDOR": 'Ven"; M112', "FILAMENT_TYPE": "PLA",
                 "FILAMENT_SUBTYPE": ""}
@@ -169,7 +180,34 @@ def test_label_lane_with_no_name_pushes_nothing():
     assert macros.commands == []
 
 
+def test_a_hand_picked_spool_is_announced_to_slicers_as_generic():
+    writer, macros = build_writer(empty_task_config(), force_generic_vendor=True)
+    writer.apply_spool(3, SPOOL)
+    assert 'VENDOR="Generic"' in macros.commands[0]
+    assert 'FILAMENT_TYPE="PLA"' in macros.commands[0]
+    assert 'FILAMENT_SUBTYPE=""' in macros.commands[0]
+
+
+def test_a_snapmaker_spool_keeps_its_own_brand():
+    writer, macros = build_writer(empty_task_config(), force_generic_vendor=True)
+    writer.apply_spool(3, SNAPMAKER_SPOOL)
+    assert 'VENDOR="Snapmaker"' in macros.commands[0]
+
+
+def test_the_afc_lane_keeps_the_real_brand_while_slicers_hear_generic():
+    writer, macros = build_writer(empty_task_config(), force_generic_vendor=True)
+    writer.apply_spool(3, SPOOL)
+    assert macros.commands[1] == set_lane_filament_name_gcode(3, "FlashForge PLA Spicy Mint")
+
+
+def test_switched_off_sends_the_brand_recorded_in_spoolman():
+    writer, macros = build_writer(empty_task_config(), force_generic_vendor=False)
+    writer.apply_spool(3, SPOOL)
+    assert macros.commands[0] == EXPECTED_GCODE
+
+
 def test_config_already_matches():
     task = empty_task_config()
     assert config_already_matches(task, 3, filament_config_clear_args(3)) is True
-    assert config_already_matches(task, 3, filament_config_args_from_spool(SPOOL, 3)) is False
+    assert config_already_matches(
+        task, 3, filament_config_args_from_spool(SPOOL, 3, False)) is False

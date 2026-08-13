@@ -20,6 +20,7 @@ def test_defaults_from_an_empty_section():
     assert options.mode == "auto"
     assert options.logging == "info"
     assert options.track_location is False
+    assert options.force_generic_vendor is True
     assert options.location == ""
     assert options.card_uids_strategy == tuple(DEFAULT_STRATEGY)
     assert options.card_uids_auto_register is False
@@ -65,6 +66,18 @@ def test_flag_accepts_the_truthy_spellings():
     for spelling in ("true", "1", "on", "YES", " True "):
         assert read_flag(FakeConfig({"track_location": spelling}), "track_location") is True
     assert read_flag(FakeConfig({"track_location": "nope"}), "track_location") is False
+
+
+def test_a_setting_that_never_reached_the_printer_stays_on():
+    unsubstituted = FakeConfig({"force_generic_vendor": "$SPOOLMAN_FORCE_GENERIC_VENDOR"})
+    assert HelperOptions(unsubstituted).force_generic_vendor is True
+    assert HelperOptions(BarePrinter()).force_generic_vendor is True
+
+
+def test_turning_it_off_in_the_app_is_read_as_off():
+    for spelling in ("false", "0", "off", "NO", " False "):
+        options = HelperOptions(FakeConfig({"force_generic_vendor": spelling}))
+        assert options.force_generic_vendor is False
 
 
 def test_text_strips_and_tolerates_none():

@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.1.33
+
+- Fix: a spool you pick yourself now shows up in Snapmaker Orca. Before, only tagged spools did:
+  a hand-picked one was sent to the slicer under its real brand, which Orca lists nowhere, so
+  **Machine Filament** came up empty for it. The printer now reports it as `Generic` plus its
+  material, the only name Orca can match. Your spool in Spoolman and the lane name on the AFC panel
+  keep the real brand.
+- New setting, **Show my hand-picked spools in Snapmaker Orca**, on by default. Turn it off and the
+  brand recorded in Spoolman is sent to the slicer again, with Orca back to listing nothing for
+  anything but Snapmaker spools.
+
 ## 0.1.32
 
 - A Spoolman published over https, or behind a name on the standard web port, can now be used: the

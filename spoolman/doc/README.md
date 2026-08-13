@@ -229,6 +229,26 @@ slicer:
   spool's location field, cleared on unload. See [Where a spool is](#where-a-spool-is-location-tracking).
 - **This printer's name (Spoolman location)**: leave empty to use this printer's own name
   automatically; set it to override.
+- **Show my hand-picked spools in Snapmaker Orca** (on by default): see below.
+
+## Show my hand-picked spools in Snapmaker Orca
+
+A setting of this plugin, on by default, for spools you pick yourself instead of reading them off a
+tag. On, the printer tells slicers such a spool is `Generic` plus its material, because those are the
+only filament names Snapmaker Orca can match: your lanes then appear under **Machine Filament**
+instead of the list coming up empty. The printer's own screen shows `Generic` too.
+
+Everything else keeps the real brand: your spool in Spoolman, the name on the AFC panel's lane, and
+what this plugin tracks and reports. Spoolman spools by Snapmaker are never renamed.
+
+A spool you had already picked keeps the brand it was filed under until you pick it again, because
+the printer only files a spool when the choice changes.
+
+Off, the brand recorded in Spoolman is sent to the slicer, and Orca lists nothing for anything but
+Snapmaker spools.
+
+Change it from the plugin's settings in the Bespok3d app; the printer picks it up on the next Klipper
+restart.
 
 ## Limits worth knowing about
 

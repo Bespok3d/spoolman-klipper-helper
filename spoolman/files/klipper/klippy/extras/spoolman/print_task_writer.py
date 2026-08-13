@@ -8,6 +8,10 @@ the source of truth there, and the firmware raises on such a write (touchscreen 
 Anomaly" popup). Running in-process means the official check and the already-matches check read
 the LIVE print_task_config object, so the stale-subscription race the old Moonraker bridge had
 does not exist here.
+
+What goes into that config is also what a slicer reads back, so with force_generic_vendor on the
+brand it carries is flattened to Generic. The lane label, Spoolman and the spool's own record keep
+the real brand.
 """
 import base64
 
@@ -29,6 +33,20 @@ NO_SUBTYPE = ""
 # and sub-type read "NONE", colour reads opaque white.
 EMPTY_FIELD = "NONE"
 EMPTY_COLOR_RGBA = "FFFFFFFF"
+# Snapmaker Orca lists a loaded spool only under a filament name it ships itself, and it ships
+# none for a third-party brand, so a spool announced under its real brand is listed nowhere at
+# all. This is the slicer-facing copy only: Spoolman, the AFC lane label and the tag keep the
+# real brand.
+GENERIC_VENDOR = "Generic"
+SNAPMAKER_VENDOR = "Snapmaker"
+
+
+def vendor_the_slicer_can_match(vendor, force_generic_vendor):
+    if not force_generic_vendor:
+        return vendor
+    if vendor.strip().lower() == SNAPMAKER_VENDOR.lower():
+        return vendor
+    return GENERIC_VENDOR
 
 
 def normalize_color_rgba(color_hex):
@@ -40,14 +58,14 @@ def normalize_color_rgba(color_hex):
     return ""
 
 
-def filament_config_args_from_spool(spool, physical_extruder):
+def filament_config_args_from_spool(spool, physical_extruder, force_generic_vendor):
     filament = (spool or {}).get("filament") or {}
     vendor = (filament.get("vendor") or {}).get("name") or ""
     material = filament.get("material") or ""
     color = normalize_color_rgba(filament.get("color_hex") or "")
     args = {"CONFIG_EXTRUDER": str(physical_extruder)}
     if material:
-        args["VENDOR"] = vendor
+        args["VENDOR"] = vendor_the_slicer_can_match(vendor, force_generic_vendor)
         args["FILAMENT_TYPE"] = material
         args["FILAMENT_SUBTYPE"] = NO_SUBTYPE
     if color:
@@ -117,10 +135,11 @@ def channel_is_official(filament_official, physical_extruder):
 
 
 class PrintTaskWriter:
-    def __init__(self, printer, logs, macros):
+    def __init__(self, printer, logs, macros, force_generic_vendor):
         self.printer = printer
         self.logs = logs
         self.macros = macros
+        self.force_generic_vendor = force_generic_vendor
 
     def _live_task_config(self):
         task = self.printer.lookup_object("print_task_config", None)
@@ -134,7 +153,8 @@ class PrintTaskWriter:
         return not channel_is_official(config.get("filament_official"), physical_extruder)
 
     def apply_spool(self, physical_extruder, spool):
-        desired = filament_config_args_from_spool(spool, physical_extruder)
+        desired = filament_config_args_from_spool(
+            spool, physical_extruder, self.force_generic_vendor)
         if not has_filament_fields(desired):
             return
         if self._should_write(physical_extruder, desired):

@@ -1,7 +1,7 @@
 {
   "name": "spoolman",
   "title": "Spoolman Bridge",
-  "version": "0.1.32",
+  "version": "0.1.33",
   "author": "bespoked",
   "min_daemon_version": "0.10.1",
   "description": "Spoolman for the U1 multi-tool: the active spool follows the tag the printer reads or the spool you pick, color and material reach the screen and AFC panel, tags are matched by their hardware UID, and you can record which printer each spool is on. Filament length per print is logged automatically.",
@@ -13,7 +13,7 @@
   "homepage": "https://github.com/Bespok3d/spoolman-klipper-helper",
   "changelog": "doc/CHANGELOG.md",
   "published_at": "2025-09-20",
-  "updated_at": "2026-08-04",
+  "updated_at": "2026-08-13",
   "publisher": "PLACEHOLDER",
   "provides": [
     {
@@ -108,6 +108,12 @@
         "description": "This printer's name, written to a loaded spool's Spoolman location field.",
         "required": false,
         "default": ""
+      },
+      {
+        "name": "SPOOLMAN_FORCE_GENERIC_VENDOR",
+        "description": "true to tell slicers a hand-picked spool is brand Generic plus its material, so Snapmaker Orca can match it. false to send the brand recorded in Spoolman.",
+        "required": false,
+        "default": "true"
       }
     ]
   },
@@ -209,6 +215,19 @@
       "hint": "The name written as a loaded spool's location in Spoolman (e.g. unU1jr). Location tracking is inactive until a name is set.",
       "userEditable": true,
       "scope": "printer"
+    },
+    {
+      "key": "SPOOLMAN_FORCE_GENERIC_VENDOR",
+      "label": "Show my hand-picked spools in Snapmaker Orca",
+      "type": "select",
+      "options": [
+        "true",
+        "false"
+      ],
+      "default": "true",
+      "hint": "On: a spool you pick yourself is reported to slicers as Generic plus its material, the only filament names Snapmaker Orca can match, so it appears under Machine Filament. Spoolman, the AFC lane name and your spool's own record keep the real brand. Off: the brand recorded in Spoolman is sent, and Orca lists nothing for anything but Snapmaker spools.",
+      "userEditable": true,
+      "scope": "global"
     }
   ],
   "permissions": [
