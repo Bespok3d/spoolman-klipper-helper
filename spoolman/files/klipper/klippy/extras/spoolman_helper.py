@@ -45,7 +45,10 @@ class SpoolmanHelper:
         self.commands = Commands(self.printer, self.logs, self)
         self.lifecycle = PrintLifecycle(self.printer, self.logs, self)
         self.writer = PrintTaskWriter(
-            self.printer, self.logs, self.macros, options.force_generic_vendor)
+            self.printer, self.logs, self.macros,
+            spoolman_overrides_tag=options.spoolman_overrides_tag,
+            subtype_sources=options.subtype_sources,
+        )
         self.tracking = SpoolTracking(
             self,
             track_location=options.track_location,

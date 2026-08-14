@@ -3,17 +3,19 @@
 Both the touchscreen and the AFC panel read color/material from the firmware print_task_config
 (by physical extruder). A manual widget pick has no tag to feed them, so the spool's identity is
 written back with the firmware's own SET_PRINT_FILAMENT_CONFIG, and the vendor+name display
-label with SET_LANE_FILAMENT_NAME. RFID-tagged (official) channels are never written: the tag is
-the source of truth there, and the firmware raises on such a write (touchscreen shows a "System
-Anomaly" popup). Running in-process means the official check and the already-matches check read
-the LIVE print_task_config object, so the stale-subscription race the old Moonraker bridge had
-does not exist here.
+label with SET_LANE_FILAMENT_NAME. RFID-tagged (official) channels are not written by default:
+the tag is the source of truth there, and the firmware raises on such a write (touchscreen shows
+a "System Anomaly" popup). The spoolman_overrides_tag experiment switch flips that precedence
+and lets the Spoolman pick write anyway. Running in-process means the official check and the
+already-matches check read the LIVE print_task_config object, so the stale-subscription race the
+old Moonraker bridge had does not exist here.
 
-What goes into that config is also what a slicer reads back, so with force_generic_vendor on the
-brand it carries is flattened to Generic. The lane label, Spoolman and the spool's own record keep
-the real brand.
+What goes into that config is also what a slicer reads back: the spool's own brand and material,
+plus a sub-type when the Spoolman record carries one. Snapmaker Orca lists the spool when a
+filament preset, shipped or user-made, carries exactly that glued name.
 """
 import base64
+import re
 
 RGB_HEX_LENGTH = 6
 RGBA_HEX_LENGTH = 8
@@ -26,27 +28,65 @@ CONFIG_FIELD_BY_ARG = {
     "FILAMENT_COLOR_RGBA": "filament_color_rgba",
 }
 QUOTED_ARGS = ("VENDOR", "FILAMENT_TYPE", "FILAMENT_SUBTYPE")
-# Spoolman has no sub-type concept, but the firmware's SET_PRINT_FILAMENT_CONFIG rejects a
-# FILAMENT_TYPE that arrives without both VENDOR and FILAMENT_SUBTYPE ("incomplete parameters").
-NO_SUBTYPE = ""
+# Spoolman has no sub-type field of its own; the firmware requires one next to FILAMENT_TYPE
+# ("incomplete parameters"), and Orca matches on it. Three sources can carry it, tried in the
+# order the subtype_sources option lists, first non-empty one wins: a "subtype" extra field the
+# user added in Spoolman, the "variant" extra field the extended firmware writes into Spoolman,
+# and the filament name itself. With none of them the sub-type reads "Basic", the name Snapmaker
+# gives its own base line and what the RFID reader already files for a tag carrying no sub-type,
+# so a spool is announced as brand + material + sub-type either way.
+BASE_LINE_SUBTYPE = "Basic"
+SUBTYPE_PROPERTY_KEYS = ("subtype", "sub_type")
+VARIANT_PROPERTY_KEYS = ("variant",)
+SUBTYPE_SOURCE_DECLARED = "sub_type"
+SUBTYPE_SOURCE_VARIANT = "variant"
+SUBTYPE_SOURCE_NAME = "name_inferred"
+KNOWN_SUBTYPE_SOURCES = (SUBTYPE_SOURCE_DECLARED, SUBTYPE_SOURCE_VARIANT, SUBTYPE_SOURCE_NAME)
+DEFAULT_SUBTYPE_SOURCES = KNOWN_SUBTYPE_SOURCES
+# The standard sub-type vocabulary. Snorca enforces no list (any string glues into the preset
+# name), so these are the sub-type words the shipped preset names actually use: Snapmaker's own
+# profiles plus the vendor profiles OrcaSlicer ships (Basic, HF, Matte, Silk, Hyper, Rapido,
+# shore grades, ...). Longest phrase first; a match files the canonical casing given here, so a
+# filament named "RAPID PETG Blue" files "Rapid". Anything unusual goes in the extra field.
+STANDARD_SUBTYPES = (
+    "Full Spectrum",
+    "High Speed",
+    "High-Flow",
+    "Translucent",
+    "Transparent",
+    "SnapSpeed",
+    "Breakaway",
+    "Luminous",
+    "Odorless",
+    "Sparkle",
+    "Support",
+    "Rapido",
+    "Marble",
+    "Galaxy",
+    "Matte",
+    "Metal",
+    "Basic",
+    "Hyper",
+    "Rapid",
+    "Tough+",
+    "Tough",
+    "Silk+",
+    "Silk",
+    "Glow",
+    "Wood",
+    "Aero",
+    "Eco",
+    "HF",
+    "HS",
+)
+# Shore hardness grades (Shore A soft, Shore D hard): any two-or-three-digit number ending in A
+# or D files as the sub-type (95A, 82A, 63D), so no list of grades is kept. Two digits minimum,
+# or a marketing "3D" in a name would file as a grade.
+SHORE_GRADE_TOKEN = re.compile(r"\d{2,3}[AD]", re.IGNORECASE)
 # The firmware's empty/cleared print_task_config slot (DEFAULT_PRINT_TASK_CONFIG): vendor, type
 # and sub-type read "NONE", colour reads opaque white.
 EMPTY_FIELD = "NONE"
 EMPTY_COLOR_RGBA = "FFFFFFFF"
-# Snapmaker Orca lists a loaded spool only under a filament name it ships itself, and it ships
-# none for a third-party brand, so a spool announced under its real brand is listed nowhere at
-# all. This is the slicer-facing copy only: Spoolman, the AFC lane label and the tag keep the
-# real brand.
-GENERIC_VENDOR = "Generic"
-SNAPMAKER_VENDOR = "Snapmaker"
-
-
-def vendor_the_slicer_can_match(vendor, force_generic_vendor):
-    if not force_generic_vendor:
-        return vendor
-    if vendor.strip().lower() == SNAPMAKER_VENDOR.lower():
-        return vendor
-    return GENERIC_VENDOR
 
 
 def normalize_color_rgba(color_hex):
@@ -58,16 +98,79 @@ def normalize_color_rgba(color_hex):
     return ""
 
 
-def filament_config_args_from_spool(spool, physical_extruder, force_generic_vendor):
+# Spoolman stores a text extra field as a JSON string, hence the quote stripping. A field set on
+# the spool itself beats the same field on its filament: it is the more specific record.
+def _extra_field_on_the_record(spool, property_keys):
+    filament = (spool or {}).get("filament") or {}
+    extra_fields = {**(filament.get("extra") or {}), **((spool or {}).get("extra") or {})}
+    values = (
+        str(extra_fields.get(property_key) or "").strip().strip('"').strip()
+        for property_key in property_keys
+    )
+    return next((value for value in values if value), "")
+
+
+def _subtype_declared_on_the_record(spool):
+    return _extra_field_on_the_record(spool, SUBTYPE_PROPERTY_KEYS)
+
+
+# The extended firmware files the sub-type in its own non-standard "variant" extra field.
+def _variant_declared_on_the_record(spool):
+    return _extra_field_on_the_record(spool, VARIANT_PROPERTY_KEYS)
+
+
+def _phrase_found_in_name(name_words_lower, subtype):
+    subtype_words = subtype.lower().split()
+    window_starts = range(len(name_words_lower) - len(subtype_words) + 1)
+    return any(
+        name_words_lower[start : start + len(subtype_words)] == subtype_words
+        for start in window_starts
+    )
+
+
+def _shore_grade_in_the_name(name_words_lower):
+    grades = (word.upper() for word in name_words_lower if SHORE_GRADE_TOKEN.fullmatch(word))
+    return next(grades, "")
+
+
+def _standard_subtype_in_the_name(filament_name):
+    name_words_lower = (filament_name or "").lower().split()
+    matches = (
+        subtype for subtype in STANDARD_SUBTYPES if _phrase_found_in_name(name_words_lower, subtype)
+    )
+    return next(matches, "") or _shore_grade_in_the_name(name_words_lower)
+
+
+def _subtype_inferred_from_the_name(spool):
+    filament = (spool or {}).get("filament") or {}
+    return _standard_subtype_in_the_name(filament.get("name"))
+
+
+SUBTYPE_READER_BY_SOURCE = {
+    SUBTYPE_SOURCE_DECLARED: _subtype_declared_on_the_record,
+    SUBTYPE_SOURCE_VARIANT: _variant_declared_on_the_record,
+    SUBTYPE_SOURCE_NAME: _subtype_inferred_from_the_name,
+}
+
+
+def subtype_for_slicers(spool, subtype_sources=DEFAULT_SUBTYPE_SOURCES):
+    readers = (SUBTYPE_READER_BY_SOURCE.get(source) for source in subtype_sources)
+    found = (read_subtype(spool) for read_subtype in readers if read_subtype)
+    return next((subtype for subtype in found if subtype), BASE_LINE_SUBTYPE)
+
+
+def filament_config_args_from_spool(
+    spool, physical_extruder, subtype_sources=DEFAULT_SUBTYPE_SOURCES
+):
     filament = (spool or {}).get("filament") or {}
     vendor = (filament.get("vendor") or {}).get("name") or ""
     material = filament.get("material") or ""
     color = normalize_color_rgba(filament.get("color_hex") or "")
     args = {"CONFIG_EXTRUDER": str(physical_extruder)}
     if material:
-        args["VENDOR"] = vendor_the_slicer_can_match(vendor, force_generic_vendor)
+        args["VENDOR"] = vendor
         args["FILAMENT_TYPE"] = material
-        args["FILAMENT_SUBTYPE"] = NO_SUBTYPE
+        args["FILAMENT_SUBTYPE"] = subtype_for_slicers(spool, subtype_sources)
     if color:
         args["FILAMENT_COLOR_RGBA"] = color
     return args
@@ -135,11 +238,21 @@ def channel_is_official(filament_official, physical_extruder):
 
 
 class PrintTaskWriter:
-    def __init__(self, printer, logs, macros, force_generic_vendor):
+    # spoolman_overrides_tag flips the lane precedence for experiments: the Spoolman pick then
+    # rewrites even a tag-filed (official) channel. Off, the tag stays the source of truth.
+    def __init__(
+        self,
+        printer,
+        logs,
+        macros,
+        spoolman_overrides_tag=False,
+        subtype_sources=DEFAULT_SUBTYPE_SOURCES,
+    ):
         self.printer = printer
         self.logs = logs
         self.macros = macros
-        self.force_generic_vendor = force_generic_vendor
+        self.spoolman_overrides_tag = spoolman_overrides_tag
+        self.subtype_sources = subtype_sources
 
     def _live_task_config(self):
         task = self.printer.lookup_object("print_task_config", None)
@@ -150,11 +263,12 @@ class PrintTaskWriter:
         config = self._live_task_config()
         if config_already_matches(config, physical_extruder, desired_args):
             return False
+        if self.spoolman_overrides_tag:
+            return True
         return not channel_is_official(config.get("filament_official"), physical_extruder)
 
     def apply_spool(self, physical_extruder, spool):
-        desired = filament_config_args_from_spool(
-            spool, physical_extruder, self.force_generic_vendor)
+        desired = filament_config_args_from_spool(spool, physical_extruder, self.subtype_sources)
         if not has_filament_fields(desired):
             return
         if self._should_write(physical_extruder, desired):

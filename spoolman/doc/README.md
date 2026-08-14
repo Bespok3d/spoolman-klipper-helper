@@ -184,7 +184,7 @@ Each line is: **what you have** then how the name behaves, then how color/materi
 - It acts only on the 4 physical lanes (the tools that map to physical extruders 0 to 3 in the
   U1's virtual-tool table). A virtual tool with no physical mapping is skipped.
 - A spool picked while a print is running or paused is **deferred**: the name updates live, and
-  the color/material land the moment the print leaves printing/paused. This is deliberate, since
+  the color/material land the moment the print leaves printing/paused. This is by design, since
   the firmware can reject the untagged write mid-print.
 - After installing or updating, Moonraker restarts and the AFC frontends' service worker may
   serve stale JavaScript. If a panel looks wrong, hard-refresh the browser.
@@ -229,47 +229,61 @@ slicer:
   spool's location field, cleared on unload. See [Where a spool is](#where-a-spool-is-location-tracking).
 - **This printer's name (Spoolman location)**: leave empty to use this printer's own name
   automatically; set it to override.
-- **Show my hand-picked spools in Snapmaker Orca** (on by default): see below.
+- **Spoolman pick overrides a tagged lane** (off by default): who wins when a lane has both an RFID
+  tag and a spool picked in Spoolman. Off, the tag wins. On, Spoolman wins. On is new ground: the
+  printer may still refuse to change a tagged lane.
+- **Where the sub-type comes from** (`sub_type,variant,name_inferred` by default): the order the
+  three sub-type sources are tried in, first one with a value wins. Reorder them to change which
+  wins, drop one to stop reading it at all. See
+  [How a hand-picked spool shows up in Snapmaker Orca](#how-a-hand-picked-spool-shows-up-in-snapmaker-orca).
 
-## Show my hand-picked spools in Snapmaker Orca
+## How a hand-picked spool shows up in Snapmaker Orca
 
-A setting of this plugin, on by default, for spools you pick yourself instead of reading them off a
-tag. On, the printer tells slicers such a spool is `Generic` plus its material, because those are the
-only filament names Snapmaker Orca can match: your lanes then appear under **Machine Filament**
-instead of the list coming up empty. The printer's own screen shows `Generic` too.
+A spool you pick yourself is announced to the slicer as its brand, its material and a sub-type.
+Spoolman has no sub-type field, so the sub-type can come from three places,
+tried in the order set by **Where the sub-type comes from**. The first one with a value wins:
 
-Everything else keeps the real brand: your spool in Spoolman, the name on the AFC panel's lane, and
-what this plugin tracks and reports. Spoolman spools by Snapmaker are never renamed.
+| Source | Where it reads from |
+| --- | --- |
+| `sub_type` | a `sub_type` (or `subtype`) field you added in Spoolman, on the spool or on the filament |
+| `variant` | the `variant` field the extended firmware writes in Spoolman |
+| `name_inferred` | the filament name, which is us working it out instead of you filing it |
 
-A spool you had already picked keeps the brand it was filed under until you pick it again, because
+`name_inferred` reads a sub-type word anywhere in the name, in any capitals: `RAPID PETG Blue` gives
+`Rapid`. The words it knows are the standard ones, Basic, Rapid, HF, Matte, Silk, High Speed and the
+rest. A Shore hardness counts too, at any value, so `TPU 82a Black` gives `82A` and `Hard TPU 63D`
+gives `63D`. When none of the three has anything, the sub-type is `Basic`, the name Snapmaker gives
+its own base line, so a spool with nothing filed reads `SUNLU TPU Basic` and your preset needs the
+`Basic` too. It is the same fallback a tag with no sub-type already gets.
+
+Snapmaker Orca lists the spool under **Machine Filament** when one of your filament presets is named
+exactly what the printer reports, capitals included. The name the printer filed is shown on the slot
+in Orca's **Device** tab: read it there and name a preset the same.
+
+Plain OrcaSlicer matches differently, and how it should behave is being worked out with one of its
+developers. Everything here is about Snapmaker Orca.
+
+A lane with a tag in it is not written from Spoolman: the tag wins, and what the tag says is what
+the slicer sees. **Spoolman pick overrides a tagged lane** flips that around. The RFID Spool
+Reader's own doc covers naming tags.
+
+A spool you had already picked keeps the name it was filed under until you pick it again, because
 the printer only files a spool when the choice changes.
-
-Off, the brand recorded in Spoolman is sent to the slicer, and Orca lists nothing for anything but
-Snapmaker spools.
-
-Change it from the plugin's settings in the Bespok3d app; the printer picks it up on the next Klipper
-restart.
 
 ## Limits worth knowing about
 
 Two things here regularly look like bugs and are not. Both sit in parts of the chain this plugin
 does not own.
 
-### The slicer only syncs to filaments it already ships
+### Snapmaker Orca only matches a preset named exactly right
 
-Snapmaker Orca and OrcaSlicer have a **Sync Filament Information** button that reads what is loaded
-in each lane and picks a slicer filament to match. It reads the brand, the material and the colour
-from the printer. What it is allowed to pick from is the slicer's own **built-in** filament list: it
-will never select a filament you created yourself, however you name it.
+Snapmaker Orca's **Sync Filament Information** button reads what is loaded in each lane and looks for
+a filament preset with that exact name, capitals included, among the ones it ships and the ones you
+made yourself. A lane whose name matches nothing is listed nowhere, with no error and nothing under
+**Machine Filament** for it.
 
-So a lane loaded with something the slicer ships (any Snapmaker filament, the Polymaker PLA family,
-and the generics) syncs to that exact entry. Anything else lands on `Generic <material>` with the
-right colour, because that is the nearest thing the slicer has. A lane it cannot place at all keeps
-whatever filament the project already had, and only its colour is updated.
-
-That is the slicer's own behaviour, on the slicer's side, and nothing Bespok3d installs changes it.
-If you want your own filament used, pick it by hand after syncing, or build your custom filament on
-top of the matching built-in one so the print settings are right either way.
+That is Snapmaker Orca's own behaviour and nothing Bespok3d installs changes it. If a lane comes up
+missing, read the name on the **Device** tab and name a preset exactly that.
 
 ### A tag Spoolman knows nothing about
 

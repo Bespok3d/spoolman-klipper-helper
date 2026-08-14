@@ -204,13 +204,18 @@ def merged_extra_with_card_uids(spool, uid_hex, write_form=DEFAULT_WRITE_FORM):
     return merged
 
 
-def parse_strategy_chain(text, default=DEFAULT_STRATEGY):
-    """Parse a comma-separated strategy list into a validated ordered tuple, deduped."""
+def parse_strategy_chain(text, default=DEFAULT_STRATEGY, known=KNOWN_STRATEGIES):
+    """Parse a comma-separated ordered list into a validated tuple, deduped.
+
+    Serves any first-match-wins chain the user can reorder (card lookup strategies, sub-type
+    sources): unknown words are dropped, and text that parses to nothing falls back to the default,
+    so a typo or an unsubstituted template variable keeps the shipped order.
+    """
     if not text:
         return tuple(default)
     seen = []
     for token in str(text).split(","):
         name = token.strip().lower()
-        if name in KNOWN_STRATEGIES and name not in seen:
+        if name in known and name not in seen:
             seen.append(name)
     return tuple(seen) if seen else tuple(default)

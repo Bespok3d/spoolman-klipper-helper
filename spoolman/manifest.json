@@ -1,7 +1,7 @@
 {
   "name": "spoolman",
   "title": "Spoolman Bridge",
-  "version": "0.1.33",
+  "version": "0.1.34",
   "author": "bespoked",
   "min_daemon_version": "0.10.1",
   "description": "Spoolman for the U1 multi-tool: the active spool follows the tag the printer reads or the spool you pick, color and material reach the screen and AFC panel, tags are matched by their hardware UID, and you can record which printer each spool is on. Filament length per print is logged automatically.",
@@ -13,7 +13,7 @@
   "homepage": "https://github.com/Bespok3d/spoolman-klipper-helper",
   "changelog": "doc/CHANGELOG.md",
   "published_at": "2025-09-20",
-  "updated_at": "2026-08-13",
+  "updated_at": "2026-08-14",
   "publisher": "PLACEHOLDER",
   "provides": [
     {
@@ -110,10 +110,16 @@
         "default": ""
       },
       {
-        "name": "SPOOLMAN_FORCE_GENERIC_VENDOR",
-        "description": "true to tell slicers a hand-picked spool is brand Generic plus its material, so Snapmaker Orca can match it. false to send the brand recorded in Spoolman.",
+        "name": "SPOOLMAN_OVERRIDES_TAG",
+        "description": "Who wins when a lane has both an RFID tag and a spool picked in Spoolman. Off, the tag wins. On, Spoolman wins.",
         "required": false,
-        "default": "true"
+        "default": "false"
+      },
+      {
+        "name": "SPOOLMAN_SUBTYPE_SOURCES",
+        "description": "Where the sub-type is read from, first match wins: a sub_type field you added in Spoolman, the variant field the extended firmware writes, or the filament name itself.",
+        "required": false,
+        "default": "sub_type,variant,name_inferred"
       }
     ]
   },
@@ -217,15 +223,25 @@
       "scope": "printer"
     },
     {
-      "key": "SPOOLMAN_FORCE_GENERIC_VENDOR",
-      "label": "Show my hand-picked spools in Snapmaker Orca",
+      "key": "SPOOLMAN_OVERRIDES_TAG",
+      "label": "Spoolman pick overrides a tagged lane",
       "type": "select",
       "options": [
         "true",
         "false"
       ],
-      "default": "true",
-      "hint": "On: a spool you pick yourself is reported to slicers as Generic plus its material, the only filament names Snapmaker Orca can match, so it appears under Machine Filament. Spoolman, the AFC lane name and your spool's own record keep the real brand. Off: the brand recorded in Spoolman is sent, and Orca lists nothing for anything but Snapmaker spools.",
+      "default": "false",
+      "hint": "When a lane has both an RFID tag and a spool picked in Spoolman, this says which one the printer believes. Off, the tag wins. On, Spoolman wins.",
+      "userEditable": true,
+      "scope": "global"
+    },
+    {
+      "key": "SPOOLMAN_SUBTYPE_SOURCES",
+      "label": "Where the sub-type comes from",
+      "type": "text",
+      "placeholder": "sub_type,variant,name_inferred",
+      "default": "sub_type,variant,name_inferred",
+      "hint": "The three places a sub-type can come from, tried in this order, first one with a value wins. sub_type: a sub_type field you added in Spoolman. variant: the variant field the extended firmware writes there. name_inferred: we read it out of the filament name, so Matte PLA Olive gives Matte. Reorder them to change which wins, remove one to stop reading it.",
       "userEditable": true,
       "scope": "global"
     }

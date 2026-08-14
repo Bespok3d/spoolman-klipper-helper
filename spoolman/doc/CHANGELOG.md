@@ -1,5 +1,33 @@
 # Changelog
 
+## 0.1.34
+
+- The **Show my hand-picked spools in Snapmaker Orca** setting is removed. A spool you pick yourself
+  is now always announced under its real brand; nothing is renamed to `Generic` any more. Tagged
+  spools never went through this: what the tag says wins.
+- To see a hand-picked spool in Snapmaker Orca, name a filament preset exactly what the printer
+  reports, capitals included. It matches against every preset, the ones it ships and the ones you
+  made yourself; the earlier notes said built-ins only, which was wrong. No match means the spool is
+  listed nowhere, with no error. The name the printer filed is shown on the slot in Orca's
+  **Device** tab, so you can copy it from there. Plain OrcaSlicer matches differently, and how it
+  should behave is being worked out with one of its developers.
+- Spoolman has no sub-type field, so the printer now looks in three places for one: a `sub_type`
+  field you added in Spoolman, the `variant` field the extended firmware writes there, or the
+  filament name itself. A SUNLU PETG named just `White` with `Variant` set to `Basic` is announced
+  as `SUNLU PETG Basic`.
+- Reading it from the name means a sub-type word anywhere in the name, in any capitals:
+  `RAPID PETG Blue` gives `Rapid`. A Shore hardness counts too, at any value, so `TPU 82a Black`
+  gives `82A` and `Hard TPU 63D` gives `63D`. With nothing found anywhere, the sub-type is `Basic`,
+  the way Snapmaker names its own base line and the way a tag with no sub-type already reads, so a
+  spool with nothing filed is announced as `SUNLU TPU Basic`.
+- New setting, **Where the sub-type comes from**: the order those three are tried in,
+  `sub_type,variant,name_inferred` by default, first one with a value wins. Reorder it if `variant`
+  should beat a `sub_type` you set yourself, or remove `name_inferred` to stop the name being read.
+- New setting, **Spoolman pick overrides a tagged lane**, off by default: who wins when a lane has
+  both an RFID tag and a spool picked in Spoolman. Off, the tag wins, which is what happened before.
+  On, Spoolman wins. On is new ground: the printer may still refuse to change a tagged lane.
+- A spool already picked keeps the name it was filed under until you pick it again.
+
 ## 0.1.33
 
 - Fix: a spool you pick yourself now shows up in Snapmaker Orca. Before, only tagged spools did:
@@ -199,7 +227,7 @@
 
 - Fix: `resolve_active_spool` picked the FIRST logical tool mapped to the physical extruder in
   `AFC.current_lane`, with no way to tell an unclaimed tie-mate from the one actually carrying
-  the physically mounted spool. Device-confirmed on `unU1jr` with a deliberately remapped table
+  the physically mounted spool. Device-confirmed on `unU1jr` with a purposely remapped table
   (T0 and T1 both pointed at the same physical extruder as T3): the carrier had a real,
   RFID-tagged red spool on that extruder, but T0 -- the first claimant, with no spool of its own
   -- won every time, so Spoolman tracked nothing. Now every claimant of a physical extruder is
@@ -243,7 +271,7 @@
   a Klipper-side toolchange macro (`base_tools.cfg`'s `SET_ACTIVE_SPOOL` call, now removed) entirely
   independent of this bridge. The two could each miss the other's update, producing a chain of
   symptoms as each was patched in isolation: a `DETECT_SPOOLS` resync (which touches every lane's
-  `spool_id` as routine housekeeping, not a deliberate pick) could promote an unmounted lane to
+  `spool_id` as routine housekeeping, not a pick you made) could promote an unmounted lane to
   active; a carrier going back to empty could leave the previous tool's spool stuck active; and
   -- the final and most direct regression -- switching from one mounted tool to another could
   strand the active spool empty entirely, because the new tool's spool_id does not necessarily
