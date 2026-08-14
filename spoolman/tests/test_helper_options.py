@@ -65,6 +65,34 @@ def test_an_unreadable_subtype_source_list_keeps_the_shipped_order():
     assert options.subtype_sources == tuple(DEFAULT_SUBTYPE_SOURCES)
 
 
+def test_a_section_that_reached_the_printer_unsubstituted_still_loads():
+    """Every value still its template variable: the printer keeps working on the shipped defaults.
+
+    An option the installer never filled in reaches the printer as literal `$NAME` text. Reading
+    one of those strictly (Klipper's getboolean) raises, Klipper then refuses the whole config, and
+    the printer is down: not just this plugin, every plugin on it. Nothing here may raise.
+    """
+    options = HelperOptions(FakeConfig({
+        "mode": "$SPOOLMAN_MODE",
+        "logging": "$SPOOLMAN_LOGGING",
+        "track_location": "$SPOOLMAN_TRACK_LOCATION",
+        "location": "$SPOOLMAN_LOCATION",
+        "spoolman_overrides_tag": "$SPOOLMAN_OVERRIDES_TAG",
+        "subtype_sources": "$SPOOLMAN_SUBTYPE_SOURCES",
+        "card_uids_strategy": "$CARD_UIDS_STRATEGY",
+        "card_uids_auto_register": "$CARD_UIDS_AUTO_REGISTER",
+        "card_uids_write_form": "$CARD_UIDS_WRITE_FORM",
+    }))
+    assert options.mode == "auto"
+    assert options.track_location is False
+    assert options.location == "$SPOOLMAN_LOCATION"
+    assert options.spoolman_overrides_tag is False
+    assert options.subtype_sources == tuple(DEFAULT_SUBTYPE_SOURCES)
+    assert options.card_uids_strategy == tuple(DEFAULT_STRATEGY)
+    assert options.card_uids_auto_register is False
+    assert options.card_uids_write_form == ARRAY_WRITE_FORM
+
+
 def test_unknown_write_form_falls_back_to_the_array():
     options = HelperOptions(FakeConfig({"card_uids_write_form": "yolo"}))
     assert options.card_uids_write_form == ARRAY_WRITE_FORM

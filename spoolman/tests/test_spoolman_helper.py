@@ -163,3 +163,20 @@ def test_a_clear_report_releases_the_tool_macro(tmp_path):
     assert "SET_GCODE_VARIABLE MACRO=T0 VARIABLE=spool_id VALUE=None" in (
         printer.objects["gcode"].scripts
     )
+
+
+def test_a_spool_taken_off_a_lane_gives_the_panel_name_back(tmp_path):
+    _helper, printer = boot_helper(tmp_path)
+    notify = printer.objects["bespok3d_rfid"].notify_callbacks[0]
+    notify(0, dict(TAGGED), False)
+    notify(0, None, True)
+    assert "SET_LANE_FILAMENT_NAME EXTRUDER=0 NAME_B64=" in printer.objects["gcode"].scripts
+
+
+def test_clearing_no_particular_lane_leaves_every_lane_name_alone(tmp_path):
+    helper, printer = boot_helper(tmp_path)
+    helper.clear_spool_for_channel(None)
+    assert not [
+        script for script in printer.objects["gcode"].scripts
+        if script.startswith("SET_LANE_FILAMENT_NAME")
+    ]

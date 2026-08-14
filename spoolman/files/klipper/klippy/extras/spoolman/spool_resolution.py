@@ -47,6 +47,7 @@ class SpoolResolution:
                     f"Unable to resolve spool id for extruder {extruder} and filament "
                     f"{filament_info_to_string(spool, self.helper.logging)}"
                 )
+                self._unbind_lane_spool(extruder)
                 return
 
             self._bind_resolved_spool(extruder, spool, spool_id)
@@ -63,6 +64,14 @@ class SpoolResolution:
         self.macros.set_spool_id_for_tool(tool, spool_id)
         self.helper.push_spool_to_afc(extruder, spool_id)
         self._label_lane_from_spoolman(extruder, spool_id)
+
+    # The exact inverse of a bind, for a lane whose filament matched no spool: it must stop
+    # advertising the one that was there before, in all three places a bind writes to. The holder
+    # stays, so the lane still reports the tag it is carrying.
+    def _unbind_lane_spool(self, extruder):
+        self.macros.set_spool_id_for_tool(f"T{extruder}", None)
+        self.helper.push_spool_to_afc(extruder, None)
+        self.writer.clear_lane_label(extruder)
 
     # The AFC panel only displays a lane name the helper pushed; an RFID-resolved lane deserves
     # one as much as a manual pick does (the tag's own vendor/type is not the Spoolman name).

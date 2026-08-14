@@ -286,7 +286,7 @@ class PrintTaskWriter:
             set_print_filament_config_gcode(desired),
             f"could not clear filament config for extruder {physical_extruder}",
         )
-        self._push_name(physical_extruder, "")
+        self.clear_lane_label(physical_extruder)
 
     # Pushed even when the persisted config already matched, so a re-pick after a restart
     # (which clears the AFC lane's name) re-labels the lane. Also called directly for
@@ -296,6 +296,11 @@ class PrintTaskWriter:
         name = composed_filament_name(spool)
         if name:
             self._push_name(physical_extruder, name)
+
+    # An empty label is how a lane gives its name back: the AFC panel emits the field only when
+    # it is set, so blanking it restores the panel's own display instead of the last spool's name.
+    def clear_lane_label(self, physical_extruder):
+        self._push_name(physical_extruder, "")
 
     def _apply_name(self, physical_extruder, spool):
         self.label_lane(physical_extruder, spool)

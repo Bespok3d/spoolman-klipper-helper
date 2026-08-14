@@ -231,7 +231,7 @@
         "false"
       ],
       "default": "false",
-      "hint": "When a lane has both an RFID tag and a spool picked in Spoolman, this says which one the printer believes. Off, the tag wins. On, Spoolman wins.",
+      "hint": "When a lane has both an RFID tag and a spool picked in Spoolman, this says which one the printer believes. Off, the tag wins. On, Spoolman wins. Turn it on if your spool profiles live in Spoolman, as they do on the extended firmware.",
       "userEditable": true,
       "scope": "global"
     },

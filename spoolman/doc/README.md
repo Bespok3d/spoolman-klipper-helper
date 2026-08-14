@@ -230,8 +230,10 @@ slicer:
 - **This printer's name (Spoolman location)**: leave empty to use this printer's own name
   automatically; set it to override.
 - **Spoolman pick overrides a tagged lane** (off by default): who wins when a lane has both an RFID
-  tag and a spool picked in Spoolman. Off, the tag wins. On, Spoolman wins. On is new ground: the
-  printer may still refuse to change a tagged lane.
+  tag and a spool picked in Spoolman. Off, the tag wins. On, Spoolman wins. Coming from the extended
+  firmware, if your spool profiles depend on Spoolman: turn this on, or a tagged lane goes by what
+  is written on the tag and your Spoolman profile is ignored. On is new ground: the printer may
+  still refuse to change a tagged lane.
 - **Where the sub-type comes from** (`sub_type,variant,name_inferred` by default): the order the
   three sub-type sources are tried in, first one with a value wins. Reorder them to change which
   wins, drop one to stop reading it at all. See
@@ -243,11 +245,11 @@ A spool you pick yourself is announced to the slicer as its brand, its material 
 Spoolman has no sub-type field, so the sub-type can come from three places,
 tried in the order set by **Where the sub-type comes from**. The first one with a value wins:
 
-| Source | Where it reads from |
-| --- | --- |
-| `sub_type` | a `sub_type` (or `subtype`) field you added in Spoolman, on the spool or on the filament |
-| `variant` | the `variant` field the extended firmware writes in Spoolman |
-| `name_inferred` | the filament name, which is us working it out instead of you filing it |
+| Source          | Where it reads from                                                                      |
+| --------------- | ---------------------------------------------------------------------------------------- |
+| `sub_type`      | a `sub_type` (or `subtype`) field you added in Spoolman, on the spool or on the filament |
+| `variant`       | the `variant` field the extended firmware writes in Spoolman                             |
+| `name_inferred` | the filament name, which is us working it out instead of you filing it                   |
 
 `name_inferred` reads a sub-type word anywhere in the name, in any capitals: `RAPID PETG Blue` gives
 `Rapid`. The words it knows are the standard ones, Basic, Rapid, HF, Matte, Silk, High Speed and the

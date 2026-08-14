@@ -8,7 +8,7 @@
 - To see a hand-picked spool in Snapmaker Orca, name a filament preset exactly what the printer
   reports, capitals included. It matches against every preset, the ones it ships and the ones you
   made yourself; the earlier notes said built-ins only, which was wrong. No match means the spool is
-  listed nowhere, with no error. The name the printer filed is shown on the slot in Orca's
+  listed nowhere, with no error. The name the printer filed is shown on the slot in Snorca's
   **Device** tab, so you can copy it from there. Plain OrcaSlicer matches differently, and how it
   should behave is being worked out with one of its developers.
 - Spoolman has no sub-type field, so the printer now looks in three places for one: a `sub_type`
@@ -25,8 +25,23 @@
   should beat a `sub_type` you set yourself, or remove `name_inferred` to stop the name being read.
 - New setting, **Spoolman pick overrides a tagged lane**, off by default: who wins when a lane has
   both an RFID tag and a spool picked in Spoolman. Off, the tag wins, which is what happened before.
-  On, Spoolman wins. On is new ground: the printer may still refuse to change a tagged lane.
+  On, Spoolman wins. Coming from the extended firmware, where your spool profiles live in Spoolman:
+  turn this on, or a tagged lane goes by what is written on the tag and your Spoolman profile is
+  ignored. On is new ground: the printer may still refuse to change a tagged lane.
 - A spool already picked keeps the name it was filed under until you pick it again.
+- Fix: a spool whose tag carries a short article number is no longer tracked against somebody
+  else's filament. Before, a tag reading `2` could pick up a filament numbered `34062` and draw
+  that roll's weight and length down instead of the one on the printer. A filament is now used only
+  when its article number is exactly the one on the tag and only one filament has it; anything else
+  leaves the spool untracked rather than bound to the wrong roll, and the console says what it read
+  and how many filaments matched.
+- Fix: a lane holding a spool the printer cannot identify no longer shows the roll that was there
+  before. Before, an untracked spool sat on the AFC panel under the last roll's brand and name, and
+  clearing it changed nothing there.
+- Fix: "clear all spools" now empties the AFC panel too. It cleared Spoolman and the printer, but
+  every lane on the AFC panel kept showing the roll that was in it. Taking a spool off a lane was
+  never affected. Both fixes need the AFC Lite plugin 0.1.11 or newer for the panel to follow: on an
+  older one it keeps showing the old roll.
 
 ## 0.1.33
 
@@ -283,7 +298,7 @@
   eligible, matching a single-extruder printer where "selected" and "mounted" are the same thing.
   Skipped (not deferred) mid-print, caught up via the existing pending-pick drain when the print ends.
 - Fix: `DETECT_SPOOLS` could trip the firmware's own `[print_task_config] filament_config, official
-  filament, not configurable!` exception (Klipper exception id 522), which the touchscreen surfaces
+filament, not configurable!` exception (Klipper exception id 522), which the touchscreen surfaces
   as a scary "System Anomaly" popup -- not a real hardware fault. Root cause: a time-of-check/
   time-of-use race. `DETECT_SPOOLS` kicks off a fresh hardware RFID re-read of the SAME channel it
   is also resolving against Spoolman; the bridge decided a channel was safe to write into using its

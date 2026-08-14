@@ -55,9 +55,13 @@ class RecordingSpoolman:
 class RecordingWriter:
     def __init__(self):
         self.labelled_lanes = []
+        self.blanked_lanes = []
 
     def label_lane(self, extruder, spool):
         self.labelled_lanes.append((extruder, spool))
+
+    def clear_lane_label(self, extruder):
+        self.blanked_lanes.append(extruder)
 
 
 class RecordingTracking:
@@ -124,13 +128,22 @@ def test_a_dict_resolution_fills_the_holders_missing_spool_id():
     assert helper.macros.tool_spool_sets == [("T0", 104)]
 
 
-def test_unresolvable_holder_warns_and_mirrors_nothing():
+def test_unresolvable_holder_warns_and_retracts_the_spool_that_was_there_before():
     resolution, helper, afc_pushes = build_resolution(resolve_result=None)
     helper.holders.spool_holders[0] = {**TAGGED, "SPOOL_ID": None}
     resolution.apply_spool_for_extruder(0)
-    assert helper.macros.tool_spool_sets == []
-    assert afc_pushes == []
+    assert helper.macros.tool_spool_sets == [("T0", None)]
+    assert afc_pushes == [(0, None)]
+    assert helper.holders.spool_holders[0]["SKU"] == "abc"
     assert any("Unable to resolve spool id" in line for line in helper.logs.lines)
+
+
+def test_a_lane_that_matches_no_spool_gives_its_panel_name_back():
+    resolution, helper, _afc_pushes = build_resolution(resolve_result=None)
+    helper.holders.spool_holders[0] = {**TAGGED, "SPOOL_ID": None}
+    resolution.apply_spool_for_extruder(0)
+    assert helper.writer.blanked_lanes == [0]
+    assert helper.writer.labelled_lanes == []
 
 
 def test_auto_mode_prefers_the_mapped_spool_with_an_id():
@@ -210,10 +223,26 @@ UID_BOUND_SPOOL = {
     "extra": {card_uids.CARD_UIDS_FIELD: json.dumps(json.dumps([SNAPMAKER_UID_HEX]))},
 }
 SKU_MATCHED_SPOOL = {"id": 31}
+UNBOUND_UID_BYTES = [0x04, 0x11, 0x22, 0x33]
 SPOOLMAN_SERVER = {
     ("/api/v1/spool", ""): [SKU_MATCHED_SPOOL, UID_BOUND_SPOOL],
-    ("/api/v1/filament", f"article_number={SNAPMAKER_SKU}"): [{"id": 9}],
+    ("/api/v1/filament", f"article_number={SNAPMAKER_SKU}"):
+        [{"id": 9, "article_number": SNAPMAKER_SKU}],
     ("/api/v1/spool", "filament.id=9"): [SKU_MATCHED_SPOOL],
+}
+
+# Spoolman filters `article_number` by SUBSTRING: a tag whose SKU is "2" gets back every filament
+# whose article number merely contains a 2, and none of them is this spool's filament.
+PARTIAL_SKU = "2"
+SUBSTRING_MATCHED_FILAMENTS = [
+    {"id": 44, "article_number": "34062"},
+    {"id": 57, "article_number": "900002"},
+]
+SUBSTRING_SPOOLMAN_SERVER = {
+    ("/api/v1/spool", ""): [SKU_MATCHED_SPOOL, UID_BOUND_SPOOL],
+    ("/api/v1/filament", f"article_number={PARTIAL_SKU}"): SUBSTRING_MATCHED_FILAMENTS,
+    ("/api/v1/spool", "filament.id=44"): [{"id": 44}],
+    ("/api/v1/spool", "filament.id=57"): [{"id": 57}],
 }
 
 
@@ -247,11 +276,11 @@ class SpoolmanServerWebhooks(RecordingWebhooks):
         self.endpoints[params["cb_endpoint"]](FakeWebRequest(params["cb_endpoint"], payload))
 
 
-def resolve_through_real_chain(info, spools_by_request=None):
+def resolve_through_real_chain(info, spools_by_request=None, logs=None, **spoolman_options):
     printer = FakePrinter()
     webhooks = SpoolmanServerWebhooks(printer, spools_by_request or SPOOLMAN_SERVER)
     printer.objects["webhooks"] = webhooks
-    spoolman = Spoolman(printer, RecordingLogs())
+    spoolman = Spoolman(printer, logs or RecordingLogs(), **spoolman_options)
     resolved = []
     spoolman.resolve_spool(info, resolved.append)
     return resolved, webhooks.requested
@@ -282,6 +311,38 @@ def test_a_re_randomized_uid_is_never_used_as_the_key():
     resolved, _requested = resolve_through_real_chain(
         {**STOCK_SNAPMAKER_TAG, "CARD_UID": [0x08, 0x5B, 0x2C, 0x71]})
     assert resolved == [SKU_MATCHED_SPOOL]
+
+
+def test_a_sku_that_only_partially_matches_an_article_number_binds_nothing():
+    logs = RecordingLogs()
+    resolved, requested = resolve_through_real_chain(
+        {**STOCK_SNAPMAKER_TAG, "SKU": PARTIAL_SKU, "CARD_UID": UNBOUND_UID_BYTES},
+        SUBSTRING_SPOOLMAN_SERVER, logs=logs, auto_register=True)
+    assert resolved == [None]
+    assert ("/api/v1/spool", "filament.id=44") not in requested
+    assert ("/api/v1/spool", "filament.id=57") not in requested
+    assert not [request for request in requested if request[0].startswith("/api/v1/spool/")]
+    assert any(f"SKU {PARTIAL_SKU} matches 0 filaments exactly (2 returned)" in line
+               for line in logs.lines)
+
+
+def test_two_filaments_sharing_one_article_number_bind_nothing():
+    twins = [{"id": 44, "article_number": PARTIAL_SKU}, {"id": 57, "article_number": PARTIAL_SKU}]
+    resolved, requested = resolve_through_real_chain(
+        {**STOCK_SNAPMAKER_TAG, "SKU": PARTIAL_SKU, "CARD_UID": UNBOUND_UID_BYTES},
+        {**SUBSTRING_SPOOLMAN_SERVER,
+         ("/api/v1/filament", f"article_number={PARTIAL_SKU}"): twins},
+        auto_register=True)
+    assert resolved == [None]
+    assert not [request for request in requested if request[1].startswith("filament.id=")]
+
+
+def test_one_exact_article_number_still_resolves_and_registers_the_card():
+    resolved, requested = resolve_through_real_chain(
+        {**STOCK_SNAPMAKER_TAG, "CARD_UID": UNBOUND_UID_BYTES}, auto_register=True)
+    assert resolved == [SKU_MATCHED_SPOOL]
+    assert ("/api/v1/spool", "filament.id=9") in requested
+    assert ("/api/v1/spool/31", "") in requested
 
 
 def test_a_spool_id_on_the_tag_still_wins_over_both():

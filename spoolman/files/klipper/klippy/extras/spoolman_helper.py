@@ -125,6 +125,8 @@ class SpoolmanHelper:
 
     def clear_spool_for_channel(self, channel, force=False):
         self.holders.clear_channel(channel, force)
+        if channel is not None:
+            self.writer.clear_lane_label(channel)
 
     def clear_all_spools(self):
         self.clear_spool_ids()

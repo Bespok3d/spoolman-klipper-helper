@@ -13,6 +13,15 @@ MAX_REMOTE_METHOD_RETRIES = 10
 EMPTY_SPOOL_IDS = (0, "0", "", None)
 
 
+# Spoolman matches `article_number` as a SUBSTRING, so a short SKU like "2" comes back carrying
+# every filament whose article number merely contains it. Only an exact article number is this
+# tag's filament.
+def filaments_with_exact_article_number(filaments, sku):
+    tag_article_number = str(sku).strip()
+    return [filament for filament in filaments
+            if str(filament.get("article_number", "")).strip() == tag_article_number]
+
+
 class Spoolman:
     def __init__(self, printer, logs, strategy_chain=card_uids.DEFAULT_STRATEGY,
                  auto_register=False, write_form=card_uids.DEFAULT_WRITE_FORM):
@@ -86,11 +95,18 @@ class Spoolman:
 
         def on_filament_result(error, filaments):
             self.logs.debug(f"FILAMENT RESULT -> {filaments}")
-            if error or not filaments:
+            if error:
                 self.logs.error(f"filament lookup error for sku {sku}: {json.dumps(error)}")
                 callback(f"filaments error for sku {sku}", filaments)
                 return
-            filament_id = filaments[0]["id"]
+            exact_filaments = filaments_with_exact_article_number(filaments or [], sku)
+            if len(exact_filaments) != 1:
+                self.logs.log(
+                    f"SKU {sku} matches {len(exact_filaments)} filaments exactly "
+                    f"({len(filaments or [])} returned), so this spool is not tracked by its SKU")
+                callback(f"sku {sku} is not a single exact filament", [])
+                return
+            filament_id = exact_filaments[0]["id"]
             spool_request = SpoolmanRequest(self.webhooks, self.logs, on_spool_result)
             spool_request.fetch("/api/v1/spool", f"filament.id={filament_id}")
 
