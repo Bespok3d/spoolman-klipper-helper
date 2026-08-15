@@ -65,13 +65,15 @@ def filament_descriptor(filament_info):
 # The firmware/detector hand back a colour either as an ARGB integer (0xAARRGGBB, e.g. 4294967295)
 # or an RRGGBBAA hex string. Both render to "#RRGGBB (name)" a person can actually read.
 def friendly_colour(argb_color):
-    rgb = _rgb_hex(argb_color)
+    rgb = rgb_hex(argb_color)
     if not rgb:
         return "unknown"
-    return f"#{rgb} ({_nearest_colour_name(rgb)})"
+    return f"#{rgb} ({nearest_colour_name(rgb)})"
 
 
-def _rgb_hex(argb_color):
+# Public because comparing two colours (a tag against a Spoolman spool) means comparing them in
+# the one form both arrive in, and that normalisation lives here with the colours it knows.
+def rgb_hex(argb_color):
     if isinstance(argb_color, int):
         return f"{argb_color & RGB_MASK:0{RGB_HEX_LENGTH}X}"
     if isinstance(argb_color, str):
@@ -82,10 +84,10 @@ def _rgb_hex(argb_color):
     return ""
 
 
-def _nearest_colour_name(rgb_hex):
-    red = int(rgb_hex[0:2], HEX_BASE)
-    green = int(rgb_hex[2:4], HEX_BASE)
-    blue = int(rgb_hex[4:6], HEX_BASE)
+def nearest_colour_name(colour_hex):
+    red = int(colour_hex[0:2], HEX_BASE)
+    green = int(colour_hex[2:4], HEX_BASE)
+    blue = int(colour_hex[4:6], HEX_BASE)
     return min(
         NAMED_COLOURS, key=lambda name: _colour_distance(NAMED_COLOURS[name], red, green, blue)
     )

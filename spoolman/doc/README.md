@@ -146,8 +146,11 @@ every behavior below.
 
 - **Name** always comes from Spoolman, resolved live from the lane/tool's `spool_id`. It shows
   the instant a spool is picked, with no help from the print task. Every resolved lane (tagged or
-  picked) also gets its display name pushed to the AFC panel, and Fluidd 1.37.2+ shows it there
-  out of the box.
+  picked) also gets its display name pushed to the AFC lane, where a web interface that reads the
+  lane's `filament_name` shows it. The name is the exact filament description the printer already
+  publishes for that lane to the slicer, brand, material and sub-type ("SUNLU PETG Basic"), so the
+  lane card, Snapmaker Orca's **Device** tab and the preset the slicer matches all say one thing,
+  and everything you already do to control that string controls the card too.
 - **Color, material, and vendor** always come from the firmware's print task (per physical
   extruder). Both the AFC panel and the touchscreen read them from there. The helper writes a
   Spoolman pick back into the print task in-process, using the firmware's own
@@ -189,6 +192,15 @@ Each line is: **what you have** then how the name behaves, then how color/materi
 - After installing or updating, Moonraker restarts and the AFC frontends' service worker may
   serve stale JavaScript. If a panel looks wrong, hard-refresh the browser.
 
+## Buttons instead of typing
+
+You do not have to type any of this. Every command below that has to do with a spool sits behind a
+button in the AFC panel of Fluidd and Mainsail: three at the top of the unit (clear all spools,
+detect spools, clear active) and a bar of three under every lane (add spool, update spool data, link
+spool). The buttons come with the Bespok3d Fluidd or Mainsail plugin, they only appear on a printer
+running this plugin, because they are its commands, and they are the same buttons in the same order
+in both. The console commands stay for anyone who prefers them, and for a slicer.
+
 ## Macros and commands
 
 These are added by the plugin and can be run from the Fluidd/Mainsail console or your
@@ -202,6 +214,12 @@ slicer:
 - `SH_BIND_CARD_UID CHANNEL={0..3} SPOOL=<id>` binds the tag currently on a lane to a Spoolman
   spool, so the next tap of that tag resolves to it directly. Needs the lane to be reporting a stable
   tag UID; it says so when there is none.
+- `SH_APPLY_TAG_TO_SPOOL CHANNEL={0..3} SPOOL=<id>` writes what the lane's tag says onto a Spoolman
+  spool you picked (brand, material, sub-type, colour, article number) and binds the tag to it. The
+  lane starts reporting that spool straight away.
+- `SH_ADD_SPOOL_FROM_TAG CHANNEL={0..3}` creates a new Spoolman spool from what the lane's tag says,
+  binds the tag to it and puts the lane on it. Asking for one by hand works whether or not
+  **Create spools from tags** is on.
 - `CLEAR_ACTIVE_SPOOL` clears the current active spool.
 - `CLEAR_ALL_SPOOLS` clears the selected spool for every tool, including RFID-tagged lanes.
 - `DETECT_SPOOLS` re-detects every loaded spool. It is the last line of defence when something did not
@@ -225,6 +243,11 @@ slicer:
   to a Spoolman spool, first match wins. See [Identifying spools by tag](#identifying-spools-by-tag).
 - **Auto-bind tag UID on SKU match** (off by default): when a spool is found by SKU and has no UID
   yet, write the current tag's UID onto it so the next tap is a direct match.
+- **Make a spool out of a tag Spoolman does not have** (`register_from_tag`, on by default): when a
+  tag matches nothing and none of your spools came close, create it in Spoolman from what the card
+  carries and bind the card to it. It also covers writing a card onto a spool you picked
+  (`SH_APPLY_TAG_TO_SPOOL`). Off, a tag Spoolman does not have is only reported. See
+  [A tag Spoolman knows nothing about](#a-tag-spoolman-knows-nothing-about).
 - **Track spool location in Spoolman** (off by default): write this printer's name into a loaded
   spool's location field, cleared on unload. See [Where a spool is](#where-a-spool-is-location-tracking).
 - **This printer's name (Spoolman location)**: leave empty to use this printer's own name
@@ -294,12 +317,28 @@ matches nothing in your Spoolman.
 
 On a tagged lane the tag is the source of truth: its data is kept on the printer, read back at
 startup and resolved again. While it resolves, the lane comes back with the right spool and there is
-nothing to do. When it resolves to nothing, the lane comes back showing what the tag itself says but
-with no Spoolman spool behind it, so nothing is tracked against it. A spool you pick by hand for that
-lane is not kept either, because on a tagged lane the tag is what persists, so you pick it again
-after the next reboot.
+nothing to do.
 
-Give the tag something to land on, once, and it stops. Two routes, either of which is enough.
+The lane's own bar in the AFC panel is where this is normally sorted out: **update spool data**
+writes the tag onto a spool you pick, **link spool** ties the tag to one, and **add spool** makes a
+new one. What follows is what happens on the console, and the commands the buttons send.
+
+When it matches nothing, the console says so and then lists what your Spoolman does hold that looks
+like the tag, five at most: only spools of the same material are offered, and the same brand and the
+same colour are what put one at the top of the list. Archived spools are never offered. If one of
+them is the spool in your hand, tell
+the printer so, with `SH_APPLY_TAG_TO_SPOOL CHANNEL={0..3} SPOOL=<id>`: what the card says is written
+onto that spool and the card is bound to it, so the next tap lands straight on it.
+
+If nothing of yours came close, the spool is made for you. The bridge creates it in Spoolman from
+what the card carries (brand, material, sub-type, colour, article number) and binds the card to it,
+so the lane starts tracking at once and the next tap resolves directly. Nothing is invented: a
+diameter and a density are required by Spoolman and are not on the card, so they are copied from your
+own filaments of that material. If you own none of that material yet, nothing is created and the
+console says which material to add one of first. Set `register_from_tag: false` in
+`[spoolman_helper]` to turn creating and writing off.
+
+The two manual routes still work and still stop a tag from missing in the first place.
 
 - **Fill in the Article Number.** Put the SKU the tag reports into the filament's **Article Number**
   in Spoolman and the SKU step of the chain finds it by itself, on every reboot. This is the route

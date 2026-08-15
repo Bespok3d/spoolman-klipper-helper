@@ -1,5 +1,48 @@
 # Changelog
 
+## 0.1.35
+
+- All of this is driven by the new buttons in the AFC panel of Fluidd and Mainsail, three at the top
+  of the unit and a bar of three under every lane. Nothing here needs typing: the buttons send these
+  commands, and they only appear on a printer running this plugin because they are its commands. The
+  buttons themselves come with the Bespok3d Fluidd or Mainsail plugin.
+- A tag your Spoolman does not have no longer passes in silence. The console names the brand,
+  material, colour and card number it read, on which lane, and the command to run next. It said
+  nothing before, at the logging level everybody runs.
+- Under that it lists the spools of yours that look like the tag, at most five, each line carrying
+  the command that ties the tag to that spool. Only spools of the same material are offered; the
+  same brand and the same colour are what put one at the top of the list. Archived spools are never
+  offered.
+- If none of yours came close, the spool is made for you in Spoolman out of what the card carries,
+  brand, material, sub-type, colour and article number, and the card is bound to it, so the lane
+  starts tracking straight away and the next tap of that tag lands on it directly. Nothing is
+  invented: a diameter and a density are not on a card, so they are copied from your own filaments
+  of that material. Own none of that material and nothing is created; the console says which
+  material to add one of first.
+- New command behind the lane's **update spool data** button,
+  `SH_APPLY_TAG_TO_SPOOL CHANNEL={0..3} SPOOL=<id>`: writes what the lane's tag says
+  onto a spool you picked and binds the tag to it, so a spool you already have in Spoolman takes the
+  tag without you retyping anything. The lane moves onto that spool there and then, and a reel that
+  another spool already owns is refused with the lane left exactly as it was.
+- New command behind the lane's **add spool** button, `SH_ADD_SPOOL_FROM_TAG CHANNEL=<lane>`: makes a new Spoolman spool out of the lane's
+  tag when you ask for it. A lane whose tag matched something loosely, or that you skipped at the
+  time, could only be sorted out in Spoolman by hand. The new spool carries the brand, material,
+  colour and article number off the tag, and the tag is bound to it so the same reel is recognised on
+  its own next time.
+- New setting, **Make a spool out of a tag Spoolman does not have**, on by default: creating a spool
+  and writing a card onto one both happen on their own. Turn it off and a tag Spoolman does not have
+  is only reported, nothing is created and nothing is written. Asking for either by hand works
+  whatever the setting says.
+- The lane card in the AFC panel now says exactly what the printer already tells the slicer that lane
+  is loaded with, "SUNLU PETG Basic": brand, material, sub-type. It is the same name you read on the
+  slot in Snapmaker Orca's **Device** tab and name your preset after, so the panel, the slicer and
+  Spoolman stop disagreeing, and everything you already use to control that name controls the card
+  too. It is there the moment the spool is added, where the card used to show only the sub-type,
+  "Matte" on its own, until something else refreshed the lane.
+- A Spoolman that never answers now says so, on the console, and says to check it is running. Before,
+  the lane went quiet with no message anywhere and looked exactly like a tag nothing matched, which
+  sent you hunting for a spool that was already there.
+
 ## 0.1.34
 
 - The **Show my hand-picked spools in Snapmaker Orca** setting is removed. A spool you pick yourself

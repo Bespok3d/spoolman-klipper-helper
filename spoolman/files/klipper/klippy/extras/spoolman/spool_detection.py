@@ -62,7 +62,7 @@ class SpoolDetection:
         if not spool_id:
             return
 
-        def on_spool(spool, picked_spool_id=spool_id):
+        def on_spool(spool, spoolman_unanswered, picked_spool_id=spool_id):
             self.holders.spools_by_id[picked_spool_id] = spool
         self.spoolman.resolve_spool({"SPOOL_ID": spool_id}, on_spool)
         extruder = self.u1_tools.extruder_for_tool(tool_id)

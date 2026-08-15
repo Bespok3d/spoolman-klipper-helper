@@ -4,13 +4,13 @@ import base64
 
 from print_task_writer import (
     PrintTaskWriter,
-    composed_filament_name,
     config_already_matches,
     filament_config_args_from_spool,
     filament_config_clear_args,
     normalize_color_rgba,
     set_lane_filament_name_gcode,
     set_print_filament_config_gcode,
+    slicer_filament_description,
 )
 
 SPOOL = {
@@ -51,6 +51,26 @@ RAPID_PETG_SPOOL = {
         "material": "PETG",
         "color_hex": "1E90FF",
         "vendor": {"name": "ELEGOO"},
+    },
+}
+
+TRANSLUCENT_SPOOL = {
+    "id": 47,
+    "filament": {
+        "name": "Translucent",
+        "material": "PLA",
+        "color_hex": "E9E9E7",
+        "vendor": {"name": "ELEGOO"},
+    },
+}
+
+MATTE_SPOOL = {
+    "id": 48,
+    "filament": {
+        "name": "PLA Matte White",
+        "material": "PLA",
+        "color_hex": "FFFFFF",
+        "vendor": {"name": "R3D"},
     },
 }
 
@@ -227,10 +247,26 @@ def test_set_print_filament_config_gcode_quotes_and_strips_unsafe():
     assert '"; M112' not in set_print_filament_config_gcode(injected)
 
 
-def test_composed_filament_name():
-    assert composed_filament_name(SPOOL) == "FlashForge PLA Spicy Mint"
-    assert composed_filament_name({"filament": {"name": "Silk Gold"}}) == "Silk Gold"
-    assert composed_filament_name({}) == ""
+def test_slicer_filament_description():
+    assert slicer_filament_description(NAME_CARRIES_SUBTYPE_SPOOL) == "ZIRO PLA Silk"
+    assert slicer_filament_description(DECLARED_SUBTYPE_SPOOL) == "ELEGOO PLA Rapid"
+    assert slicer_filament_description(TRANSLUCENT_SPOOL) == "ELEGOO PLA Translucent"
+    assert slicer_filament_description(MATTE_SPOOL) == "R3D PLA Matte"
+
+
+# The whole point of the change: the lane card and the slicer read one string, so a preset named
+# what the Device tab shows is also what the panel says. Any second composition drifts from it.
+def test_lane_name_is_exactly_what_the_printer_publishes_to_the_slicer():
+    published = filament_config_args_from_spool(SPOOL, 3)
+    fields = (published["VENDOR"], published["FILAMENT_TYPE"], published["FILAMENT_SUBTYPE"])
+    assert slicer_filament_description(SPOOL) == " ".join(fields) == "FlashForge PLA Basic"
+
+
+# A record with no material is published to nobody: the firmware refuses a filament type it was
+# not given, so the lane keeps the panel's own display rather than a half-written name.
+def test_no_material_means_no_description():
+    assert slicer_filament_description({"filament": {"name": "Silk Gold"}}) == ""
+    assert slicer_filament_description({}) == ""
 
 
 def test_lane_name_gcode_base64_roundtrips_a_spaced_name():
@@ -294,11 +330,11 @@ def test_clear_already_empty_slot_is_a_no_op():
     assert macros.commands == []
 
 
-def test_label_lane_pushes_the_composed_name():
+def test_label_lane_pushes_the_slicer_description():
     writer, macros = build_writer(empty_task_config())
     writer.label_lane(1, SPOOL)
     assert len(macros.commands) == 1
-    assert macros.commands[0] == set_lane_filament_name_gcode(1, "FlashForge PLA Spicy Mint")
+    assert macros.commands[0] == set_lane_filament_name_gcode(1, "FlashForge PLA Basic")
 
 
 def test_label_lane_with_no_name_pushes_nothing():
@@ -307,10 +343,10 @@ def test_label_lane_with_no_name_pushes_nothing():
     assert macros.commands == []
 
 
-def test_the_afc_lane_shows_the_composed_spoolman_name():
+def test_the_afc_lane_shows_what_the_slicer_gets():
     writer, macros = build_writer(empty_task_config())
     writer.apply_spool(3, SPOOL)
-    assert macros.commands[1] == set_lane_filament_name_gcode(3, "FlashForge PLA Spicy Mint")
+    assert macros.commands[1] == set_lane_filament_name_gcode(3, "FlashForge PLA Basic")
 
 
 def test_config_already_matches():

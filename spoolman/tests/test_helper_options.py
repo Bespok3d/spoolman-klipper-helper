@@ -27,6 +27,13 @@ def test_defaults_from_an_empty_section():
     assert options.card_uids_strategy == tuple(DEFAULT_STRATEGY)
     assert options.card_uids_auto_register is False
     assert options.card_uids_write_form == ARRAY_WRITE_FORM
+    assert options.register_from_tag is True
+
+
+def test_making_a_spool_out_of_a_tag_is_on_until_it_is_switched_off():
+    assert HelperOptions(FakeConfig({"register_from_tag": "false"})).register_from_tag is False
+    assert HelperOptions(FakeConfig({"register_from_tag": "yes"})).register_from_tag is True
+    assert read_flag(FakeConfig({}), "register_from_tag", default=True) is True
 
 
 def test_bare_printer_object_yields_all_defaults():

@@ -1,7 +1,7 @@
 {
   "name": "spoolman",
   "title": "Spoolman Bridge",
-  "version": "0.1.34",
+  "version": "0.1.35",
   "author": "bespoked",
   "min_daemon_version": "0.10.1",
   "description": "Spoolman for the U1 multi-tool: the active spool follows the tag the printer reads or the spool you pick, color and material reach the screen and AFC panel, tags are matched by their hardware UID, and you can record which printer each spool is on. Filament length per print is logged automatically.",
@@ -13,7 +13,7 @@
   "homepage": "https://github.com/Bespok3d/spoolman-klipper-helper",
   "changelog": "doc/CHANGELOG.md",
   "published_at": "2025-09-20",
-  "updated_at": "2026-08-14",
+  "updated_at": "2026-08-15",
   "publisher": "PLACEHOLDER",
   "provides": [
     {
@@ -63,6 +63,11 @@
       "name": "SH_BIND_CARD_UID",
       "params": "CHANNEL={0..3} SPOOL=<id>",
       "description": "Bind the tag UID currently on a lane to a Spoolman spool, so the next tap of that tag resolves to it directly."
+    },
+    {
+      "name": "SH_APPLY_TAG_TO_SPOOL",
+      "params": "CHANNEL={0..3} SPOOL=<id>",
+      "description": "Write what the lane's tag says onto a Spoolman spool you picked, and bind the tag to it."
     },
     {
       "name": "SH_CONFIG",
@@ -196,6 +201,19 @@
       ],
       "default": "array",
       "hint": "array: a proper list, the right shape and the default. comma_separated: the same UIDs flattened into one comma-separated value, for when another app reading this field cannot handle a list. Either form is read back correctly here.",
+      "userEditable": true,
+      "scope": "global"
+    },
+    {
+      "key": "SPOOLMAN_REGISTER_FROM_TAG",
+      "label": "Make a spool out of a tag Spoolman does not have",
+      "type": "select",
+      "options": [
+        "true",
+        "false"
+      ],
+      "default": "true",
+      "hint": "On by default. When a tag matches nothing and none of your spools came close, the spool is created in Spoolman from what the card carries and the card is bound to it. Diameter and density are not on the card, so they are copied from your own filaments of that material; if you have none of that material, nothing is created and the console says so. This also covers writing a card onto a spool you picked (SH_APPLY_TAG_TO_SPOOL).",
       "userEditable": true,
       "scope": "global"
     },

@@ -23,7 +23,8 @@ class Macros:
 
     # FORCE=1 is required because the firmware refuses to overwrite an "official" (RFID-tagged)
     # extruder otherwise (print_task_config.cmd_SET_PRINT_FILAMENT_CONFIG). An explicit
-    # CLEAR_ALL_SPOOLS is a deliberate reset, so it wipes every slot including tagged ones.
+    # CLEAR_ALL_SPOOLS is the user asking for a full reset, so it wipes every slot including
+    # tagged ones.
     def clear_print_task_config(self, channel):
         command = (
             f"SET_PRINT_FILAMENT_CONFIG CONFIG_EXTRUDER={channel} FORCE=1 "
@@ -38,7 +39,7 @@ class Macros:
             self.logs.verbose(f"macro for T{tool_id} variables: {macro.variables}")
             spool_id = macro.variables.get('spool_id', None)
             if spool_id is None:
-                self.logs.warn(f"T{tool_id} macro has no spool_id")
+                self.logs.verbose(f"T{tool_id} macro has no spool_id")
             return spool_id
         except Exception:
             self.logs.warn(f"T{tool_id} macro not found")

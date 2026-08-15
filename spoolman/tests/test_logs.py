@@ -35,6 +35,18 @@ def test_should_output_respects_configured_level() -> None:
     assert not logs.should_output("debug")
 
 
+def test_a_warning_is_visible_at_the_default_level() -> None:
+    logs, gcode = make_logs("info")
+    logs.warn("the tag on channel 0 matched nothing")
+    assert gcode.messages == ["🟡🧶 SH [WARNING]: the tag on channel 0 matched nothing"]
+
+
+def test_routine_chatter_stays_quiet_at_the_default_level() -> None:
+    logs, gcode = make_logs("info")
+    logs.verbose("resolving")
+    assert gcode.messages == []
+
+
 def test_format_message_shape() -> None:
     logs, _ = make_logs("debug")
     assert logs.format_message("INFO", "X", "hi") == "X🧶 SH [INFO]: hi"

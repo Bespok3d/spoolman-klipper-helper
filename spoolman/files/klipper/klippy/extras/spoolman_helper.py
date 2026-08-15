@@ -37,10 +37,7 @@ class SpoolmanHelper:
 
         self.logs = Logs(self.printer, self)
         self.u1_tools = U1Tools(config, self.logs)
-        self.spoolman = Spoolman(
-            self.printer, self.logs, options.card_uids_strategy, options.card_uids_auto_register,
-            options.card_uids_write_form
-        )
+        self.spoolman = Spoolman(self.printer, self.logs, options)
         self.macros = Macros(self.printer, self.logs)
         self.commands = Commands(self.printer, self.logs, self)
         self.lifecycle = PrintLifecycle(self.printer, self.logs, self)
@@ -142,6 +139,12 @@ class SpoolmanHelper:
 
     def bind_channel_card_uid(self, channel, spool_id):
         self.resolution.bind_channel_card_uid(channel, spool_id)
+
+    def apply_tag_to_spool(self, channel, spool_id):
+        self.resolution.apply_tag_to_spool(channel, spool_id)
+
+    def add_spool_from_tag(self, channel):
+        self.resolution.add_spool_from_tag(channel)
 
     def sync_spools_tools(self):
         self.detection.sync_spools_tools()

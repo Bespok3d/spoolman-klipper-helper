@@ -5,6 +5,22 @@ timers a test drains by hand, a webhooks that records the Moonraker calls, a pri
 those out, and a log sink). They lived in one test file and were about to be copied into a
 third, so they live here once.
 """
+from spoolman.helper_options import HelperOptions
+
+
+class WrittenSection:
+    """The [spoolman_helper] section with only the options a test wrote in it."""
+
+    def __init__(self, written):
+        self.written = written
+
+    def get(self, key, default=None):
+        return self.written.get(key, default)
+
+
+def helper_options(**written):
+    """The options a printer would read, with the given ones turned over and the rest shipped."""
+    return HelperOptions(WrittenSection(written))
 
 
 class FakeReactor:

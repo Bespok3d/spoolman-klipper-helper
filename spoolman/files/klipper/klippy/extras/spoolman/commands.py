@@ -45,6 +45,14 @@ class Commands:
             "SH_BIND_CARD_UID", self.cmd_BIND_CARD_UID,
             desc="Spoolman Helper: Bind a channel's tag UID to a Spoolman spool",
         )
+        self.gcode.register_command(
+            "SH_APPLY_TAG_TO_SPOOL", self.cmd_APPLY_TAG_TO_SPOOL,
+            desc="Spoolman Helper: Write a channel's tag onto a Spoolman spool",
+        )
+        self.gcode.register_command(
+            "SH_ADD_SPOOL_FROM_TAG", self.cmd_ADD_SPOOL_FROM_TAG,
+            desc="Spoolman Helper: Create a Spoolman spool from a channel's tag and use it",
+        )
 
     def cmd_SET_ACTIVE_TOOL(self, gcmd):
         tool_id = gcmd.get_int("TOOL", minval=0, maxval=MAX_TOOLS_MAX_INDEX)
@@ -90,6 +98,17 @@ class Commands:
         spool_id = gcmd.get_int("SPOOL", minval=1)
         self.logs.verbose(f"BIND_CARD_UID: channel {channel} -> spool {spool_id}")
         self.helper.bind_channel_card_uid(channel, spool_id)
+
+    def cmd_APPLY_TAG_TO_SPOOL(self, gcmd):
+        channel = gcmd.get_int("CHANNEL", minval=0, maxval=MAX_TOOLS_MAX_INDEX)
+        spool_id = gcmd.get_int("SPOOL", minval=1)
+        self.logs.verbose(f"APPLY_TAG_TO_SPOOL: channel {channel} -> spool {spool_id}")
+        self.helper.apply_tag_to_spool(channel, spool_id)
+
+    def cmd_ADD_SPOOL_FROM_TAG(self, gcmd):
+        channel = gcmd.get_int("CHANNEL", minval=0, maxval=MAX_TOOLS_MAX_INDEX)
+        self.logs.verbose(f"ADD_SPOOL_FROM_TAG: channel {channel}")
+        self.helper.add_spool_from_tag(channel)
 
     def cmd_SH_DEBUG(self, gcmd):
         sku = gcmd.get("SKU", None)

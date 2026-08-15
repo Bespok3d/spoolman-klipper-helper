@@ -46,7 +46,7 @@ class RecordingSpoolman:
 
     def resolve_spool(self, info, callback):
         self.resolved_infos.append(info)
-        callback({"id": info["SPOOL_ID"]})
+        callback({"id": info["SPOOL_ID"]}, False)
 
 
 class FakeU1Tools:

@@ -17,7 +17,7 @@ def push_spool_to_afc(printer: Any, channel: int, spool_id: Any, extruders_count
         lane.spool_id = spool_id
 
 
-# The display name ("<vendor> <filament name>") the helper pushed onto the lane via
+# The filament description ("<brand> <material> <sub-type>") the helper pushed onto the lane via
 # SET_LANE_FILAMENT_NAME, read back. Empty when AFC is absent or no name was pushed.
 def lane_filament_name(printer: Any, channel: int) -> str:
     lane = printer.lookup_object(f"AFC_lane E{channel}", None)

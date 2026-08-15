@@ -5,12 +5,30 @@ import uuid
 import gcode
 
 from . import card_uids
+from .helper_options import HelperOptions
+from .spool_candidates import candidate_spools
+from .tag_registration import (
+    card_details_payload,
+    dimensions_of_material,
+    filament_payload,
+    matching_filament,
+    spool_payload,
+    vendor_id_named,
+    vendor_payload,
+)
+from .unmatched_tag import (
+    REGISTER_DISABLED,
+    REGISTER_REFUSED,
+    REGISTER_UNMEASURED_MATERIAL,
+    REGISTER_UNREACHABLE,
+)
 
 PENDING_CLEANUP_SECONDS = 30
 MAX_RETRY_DELAY_SECONDS = 5.0
 RETRY_DELAY_STEP_SECONDS = 1.0
 MAX_REMOTE_METHOD_RETRIES = 10
 EMPTY_SPOOL_IDS = (0, "0", "", None)
+SPOOLMAN_SILENT_ERROR = "Spoolman did not answer"
 
 
 # Spoolman matches `article_number` as a SUBSTRING, so a short SKU like "2" comes back carrying
@@ -23,15 +41,17 @@ def filaments_with_exact_article_number(filaments, sku):
 
 
 class Spoolman:
-    def __init__(self, printer, logs, strategy_chain=card_uids.DEFAULT_STRATEGY,
-                 auto_register=False, write_form=card_uids.DEFAULT_WRITE_FORM):
+    # `options` is the [spoolman_helper] section. A bench passing none gets the shipped defaults.
+    def __init__(self, printer, logs, options=None):
+        section = options if options is not None else HelperOptions(None)
         self.printer = printer
         self.logs = logs
         self.gcode = self.printer.lookup_object("gcode")
         self.webhooks = self.printer.lookup_object("webhooks")
-        self.strategy_chain = tuple(strategy_chain)
-        self.auto_register = auto_register
-        self.write_form = write_form
+        self.strategy_chain = tuple(section.card_uids_strategy)
+        self.auto_register = section.card_uids_auto_register
+        self.write_form = section.card_uids_write_form
+        self.register_from_tag = section.register_from_tag
         self._active_spool_epoch = 0
 
     def set_active_spool(self, spool_id):
@@ -78,6 +98,143 @@ class Spoolman:
         SpoolmanRequest(self.webhooks, self.logs, on_result).fetch(
             f"/api/v1/spool/{spool_id}", "")
 
+    # The whole inventory, the one call three different questions are answered from: which spool
+    # owns this UID, who already owns it before a bind, and which spools come close to a tag that
+    # matched nothing. Archived spools are left out by the server (allow_archived defaults false).
+    def _fetch_all_spools(self, on_spools):
+        SpoolmanRequest(self.webhooks, self.logs, on_spools).fetch("/api/v1/spool", "")
+
+    # Hands back None when Spoolman could not be reached, an empty list when it answered and
+    # nothing came close. The caller has to tell those apart: one is a spool to go and find, the
+    # other is a server to go and start.
+    def search_candidates(self, filament_info, on_candidates):
+        def on_spools(error, spools):
+            if error:
+                self.logs.verbose(f"Candidate search could not read the inventory: {error}")
+                on_candidates(None)
+                return
+            on_candidates(candidate_spools(filament_info, spools or []))
+
+        self._fetch_all_spools(on_spools)
+
+    # A tag nothing matched and nothing came close to becomes a spool of its own. Their filaments
+    # are read first: one of them may already describe this tag, and if none does they are what the
+    # new record's diameter and density are copied from. Hands back the new spool id, or the code
+    # for why there is none.
+    # The setting governs what the helper creates on its own while it resolves a lane. Somebody
+    # pressing the add button has asked for this one spool by hand, which is not the thing the
+    # setting is there to hold back, so their press goes through with the setting off.
+    def register_tag_as_spool(self, filament_info, on_registered, asked_by_hand=False):
+        if not (self.register_from_tag or asked_by_hand):
+            on_registered(None, REGISTER_DISABLED)
+            return
+
+        def on_filaments(error, filaments):
+            if error:
+                self.logs.verbose(f"Cannot register the tag, Spoolman was silent: {error}")
+                on_registered(None, REGISTER_UNREACHABLE)
+                return
+            self._spool_for_tag(filament_info, filaments or [], on_registered)
+
+        SpoolmanRequest(self.webhooks, self.logs, on_filaments).fetch("/api/v1/filament", "")
+
+    def _spool_for_tag(self, filament_info, filaments, on_registered):
+        already_theirs = matching_filament(filament_info, filaments)
+        if already_theirs:
+            self._create_spool(filament_info, already_theirs.get("id"), on_registered)
+            return
+        dimensions = dimensions_of_material(filament_info, filaments)
+        if not dimensions:
+            on_registered(None, REGISTER_UNMEASURED_MATERIAL)
+            return
+        self._create_filament(filament_info, filaments, dimensions, on_registered)
+
+    def _create_filament(self, filament_info, filaments, dimensions, on_registered):
+        def with_vendor(vendor_id):
+            self._post_filament(filament_info, vendor_id, dimensions, on_registered)
+
+        self._resolve_vendor(filament_info, filaments, with_vendor)
+
+    # A vendor record is only created when the card names a vendor they do not have. A vendor
+    # Spoolman would not take is not worth failing the spool over, so the filament goes in without
+    # one rather than not at all.
+    def _resolve_vendor(self, filament_info, filaments, on_vendor):
+        theirs = vendor_id_named(filament_info.get("VENDOR"), filaments)
+        payload = vendor_payload(filament_info)
+        if theirs or not payload["name"]:
+            on_vendor(theirs)
+            return
+
+        def on_created(error, vendor):
+            on_vendor(None if error else (vendor or {}).get("id"))
+
+        SpoolmanRequest(self.webhooks, self.logs, on_created).fetch(
+            "/api/v1/vendor", "", method="POST", body=payload)
+
+    def _post_filament(self, filament_info, vendor_id, dimensions, on_registered):
+        def on_created(error, filament):
+            filament_id = (filament or {}).get("id")
+            if error or not filament_id:
+                self.logs.verbose(f"Spoolman refused a filament for the tag: {error}")
+                on_registered(None, REGISTER_REFUSED)
+                return
+            self._create_spool(filament_info, filament_id, on_registered)
+
+        SpoolmanRequest(self.webhooks, self.logs, on_created).fetch(
+            "/api/v1/filament", "", method="POST",
+            body=filament_payload(filament_info, vendor_id, dimensions))
+
+    # The card is bound to the new spool in the same breath, so the next insert of this spool
+    # resolves by its card number instead of creating a second spool for it.
+    def _create_spool(self, filament_info, filament_id, on_registered):
+        def on_created(error, spool):
+            spool_id = (spool or {}).get("id")
+            if error or not spool_id:
+                self.logs.verbose(f"Spoolman refused a spool for the tag: {error}")
+                on_registered(None, REGISTER_REFUSED)
+                return
+            self.bind_uid(spool_id, card_uids.trackable_uid(filament_info.get("CARD_UID")))
+            on_registered(spool_id, None, spool)
+
+        SpoolmanRequest(self.webhooks, self.logs, on_created).fetch(
+            "/api/v1/spool", "", method="POST", body=spool_payload(filament_id))
+
+    # Writing the tag onto a spool they picked: what the card says goes onto that spool's filament,
+    # and the card is bound to the spool so the pick holds next time.
+    def apply_tag_to_spool(self, filament_info, spool_id, on_applied):
+        if not self.register_from_tag:
+            on_applied(REGISTER_DISABLED)
+            return
+
+        def on_spools(error, spools):
+            if error:
+                self.logs.verbose(
+                    f"Cannot write the tag onto a spool, Spoolman was silent: {error}")
+                on_applied(REGISTER_UNREACHABLE)
+                return
+            self._write_tag_onto_spool(filament_info, spool_id, spools or [], on_applied)
+
+        self._fetch_all_spools(on_spools)
+
+    def _write_tag_onto_spool(self, filament_info, spool_id, spools, on_applied):
+        picked = [spool for spool in spools if spool.get("id") == spool_id]
+        filament_id = ((picked[0] if picked else {}).get("filament") or {}).get("id")
+        if not filament_id:
+            self.logs.verbose(f"Spool {spool_id} is not one of theirs, or carries no filament")
+            on_applied(REGISTER_REFUSED)
+            return
+
+        def on_patched(error, payload):
+            if error:
+                on_applied(REGISTER_REFUSED)
+                return
+            self.bind_uid(spool_id, card_uids.trackable_uid(filament_info.get("CARD_UID")))
+            on_applied(None)
+
+        SpoolmanRequest(self.webhooks, self.logs, on_patched).fetch(
+            f"/api/v1/filament/{filament_id}", "", method="PATCH",
+            body=card_details_payload(filament_info))
+
     def patch_location(self, spool_id, location):
         def on_result(error, payload):
             if error:
@@ -104,7 +261,7 @@ class Spoolman:
                 self.logs.log(
                     f"SKU {sku} matches {len(exact_filaments)} filaments exactly "
                     f"({len(filaments or [])} returned), so this spool is not tracked by its SKU")
-                callback(f"sku {sku} is not a single exact filament", [])
+                callback(None, [])  # a clean "no such filament", never a Spoolman failure
                 return
             filament_id = exact_filaments[0]["id"]
             spool_request = SpoolmanRequest(self.webhooks, self.logs, on_spool_result)
@@ -113,23 +270,27 @@ class Spoolman:
         filament_request = SpoolmanRequest(self.webhooks, self.logs, on_filament_result)
         filament_request.fetch("/api/v1/filament", f"article_number={sku}")
 
+    # The callback is handed the resolved spool (None when nothing matched) and whether Spoolman
+    # went unanswered along the way, because a lane the user must go and fix in Spoolman and a
+    # lane that failed because Spoolman is down are two different problems to report.
     def resolve_spool(self, info, callback):
         uid = card_uids.trackable_uid(info.get("CARD_UID"))
         self.logs.verbose(
             f"Resolving spool: vendor->{info.get('VENDOR')}, sku->{info.get('SKU')}, "
             f"spool_id->{info.get('SPOOL_ID')}, uid->{uid}, chain->{self.strategy_chain}"
         )
-        self._run_strategies(info, uid, list(self.strategy_chain), callback)
+        self._run_strategies(info, uid, list(self.strategy_chain), callback, False)
 
-    def _run_strategies(self, info, uid, remaining, callback):
+    def _run_strategies(self, info, uid, remaining, callback, spoolman_unanswered):
         if not remaining:
-            self.logs.warn("No resolution strategy matched this tag")
-            callback(None)
+            self.logs.verbose("Resolution chain exhausted, no strategy matched this tag")
+            callback(None, spoolman_unanswered)
             return
         strategy = remaining[0]
 
-        def advance():
-            self._run_strategies(info, uid, remaining[1:], callback)
+        def advance(unanswered=False):
+            self._run_strategies(info, uid, remaining[1:], callback,
+                                 spoolman_unanswered or unanswered)
 
         if strategy == "spool_id":
             self._resolve_by_spool_id(info, callback, advance)
@@ -144,7 +305,7 @@ class Spoolman:
         spool_id = info.get("SPOOL_ID")
         if spool_id and spool_id not in EMPTY_SPOOL_IDS:
             self.logs.debug(f"Resolved by spool_id ({spool_id})")
-            callback(spool_id)
+            callback(spool_id, False)
         else:
             advance()
 
@@ -154,14 +315,17 @@ class Spoolman:
             return
 
         def on_spools(error, spools):
+            if error:
+                advance(unanswered=True)
+                return
             spool = card_uids.match_spool_by_card_uid(spools or [], uid)
             if spool:
                 self.logs.debug(f"Resolved by UID {uid}: spool {spool.get('id')}")
-                callback(spool)
+                callback(spool, False)
             else:
                 advance()
 
-        SpoolmanRequest(self.webhooks, self.logs, on_spools).fetch("/api/v1/spool", "")
+        self._fetch_all_spools(on_spools)
 
     def _resolve_by_sku(self, info, uid, callback, advance):
         sku = info.get("SKU")
@@ -171,12 +335,12 @@ class Spoolman:
 
         def on_lookup(error, spools):
             if error or not spools:
-                self.logs.error(f"Cannot find spools for sku: {sku}")
-                advance()
+                self.logs.verbose(f"Cannot find spools for sku: {sku}")
+                advance(unanswered=bool(error))
                 return
             self.logs.debug(f"Resolved by sku->{sku}: spool {spools[0].get('id')}")
             self._auto_register_uid(spools[0], uid)
-            callback(spools[0])
+            callback(spools[0], False)
 
         self.lookup_spoolman(sku, on_lookup)
 
@@ -205,7 +369,7 @@ class Spoolman:
         def on_spools(error, spools):
             self._bind_unless_assigned(spool_id, uid, spools or [], on_done)
 
-        SpoolmanRequest(self.webhooks, self.logs, on_spools).fetch("/api/v1/spool", "")
+        self._fetch_all_spools(on_spools)
 
     def _bind_unless_assigned(self, spool_id, uid, spools, on_done):
         owner = card_uids.match_spool_by_card_uid(spools, uid)
@@ -245,7 +409,6 @@ class SpoolmanRequest:
         self._retry_args = None
         self._endpoint_registered = False
         self._retry_count = 0
-        self._max_retries = 10
 
     def fetch(self, path, query, method="GET", body=None):
         try:
@@ -254,15 +417,34 @@ class SpoolmanRequest:
             if "not registered" not in str(command_err):
                 raise
             self._schedule_retry(path, query, method, body)
-        except Exception:
+        except Exception as fetch_err:
             logging.exception("fetch error")
+            self.logs.error(f"Spoolman request {method} {path} could not be sent: {fetch_err}")
 
+    # A request Moonraker never answers used to be dropped in silence, leaving the resolution
+    # chain waiting on a callback that would never come. The give-up says so on the console and
+    # answers the chain, so the lane reaches a verdict instead of sitting in limbo. A timer armed
+    # for a superseded attempt is stale and says nothing; the live attempt owns the verdict.
     def _arm_cleanup_timer(self):
+        armed_for_attempt = self._retry_count
+
         def _cleanup(eventtime):
-            SpoolmanRequest._pending.pop(self.request_id, None)
+            if armed_for_attempt == self._retry_count:
+                self._give_up_on_answer(f"no reply in {PENDING_CLEANUP_SECONDS}s")
             return self.reactor.NEVER
 
         self.reactor.register_timer(_cleanup, self.reactor.monotonic() + PENDING_CLEANUP_SECONDS)
+
+    def _give_up_on_answer(self, reason):
+        if SpoolmanRequest._pending.pop(self.request_id, None) is None:
+            return
+        self.logs.warn(f"{SPOOLMAN_SILENT_ERROR}: {reason}")
+        if not self.callback:
+            return
+        try:
+            self.callback(SPOOLMAN_SILENT_ERROR, None)
+        except Exception:
+            logging.exception("SpoolmanRequest give-up callback failed")
 
     def _dispatch_fetch(self, path, query, method, body):
         cb_endpoint = f"spoolman_helper/result/{self.request_id}"
@@ -284,11 +466,9 @@ class SpoolmanRequest:
     def _schedule_retry(self, path, query, method, body):
         self._retry_args = (path, query, method, body)
         self._retry_count += 1
-        if self._retry_count > self._max_retries:
-            self.logs.error(
-                f"spoolman_proxy unavailable after {self._retry_count} attempts "
-                f"id={self.request_id}"
-            )
+        if self._retry_count > MAX_REMOTE_METHOD_RETRIES:
+            self._give_up_on_answer(
+                f"Moonraker never took the request after {self._retry_count} attempts")
             return
         delay = min(MAX_RETRY_DELAY_SECONDS, RETRY_DELAY_STEP_SECONDS * self._retry_count)
         self.logs.debug(

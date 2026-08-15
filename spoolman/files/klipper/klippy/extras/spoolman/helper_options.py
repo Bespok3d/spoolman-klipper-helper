@@ -14,8 +14,11 @@ def _read_raw(config, key, default):
     return config.get(key, default) if hasattr(config, "get") else default
 
 
-def read_flag(config, key):
-    return str(_read_raw(config, key, "false")).strip().lower() in TRUTHY
+# An option nobody wrote keeps its default, so a switch that is on until it is turned off reads
+# the same way as one that is off until it is turned on.
+def read_flag(config, key, default=False):
+    written = str(_read_raw(config, key, "")).strip().lower()
+    return written in TRUTHY if written else default
 
 
 def read_text(config, key):
@@ -41,4 +44,5 @@ class HelperOptions:
         )
         self.card_uids_strategy = parse_strategy_chain(_read_raw(config, "card_uids_strategy", ""))
         self.card_uids_auto_register = read_flag(config, "card_uids_auto_register")
+        self.register_from_tag = read_flag(config, "register_from_tag", default=True)
         self.card_uids_write_form = parse_write_form(_read_raw(config, "card_uids_write_form", ""))

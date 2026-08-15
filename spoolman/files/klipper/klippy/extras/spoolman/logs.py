@@ -4,7 +4,9 @@ from typing import Any
 class Logs:
     """User-facing notifications only; this module must never crash the print."""
 
-    levels = ["error", "info", "warn", "verbose", "debug"]
+    # A warning outranks routine information: it is the level a user must still see at the
+    # default setting. Anything that is merely routine belongs at verbose, never at warn.
+    levels = ["error", "warn", "info", "verbose", "debug"]
 
     def __init__(self, printer: Any, helper: Any) -> None:
         self.printer = printer

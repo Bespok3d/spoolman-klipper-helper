@@ -2,9 +2,10 @@
 
 Both the touchscreen and the AFC panel read color/material from the firmware print_task_config
 (by physical extruder). A manual widget pick has no tag to feed them, so the spool's identity is
-written back with the firmware's own SET_PRINT_FILAMENT_CONFIG, and the vendor+name display
-label with SET_LANE_FILAMENT_NAME. RFID-tagged (official) channels are not written by default:
-the tag is the source of truth there, and the firmware raises on such a write (touchscreen shows
+written back with the firmware's own SET_PRINT_FILAMENT_CONFIG, and the same description the
+slicer gets is put on the lane card with SET_LANE_FILAMENT_NAME. RFID-tagged (official) channels are
+not written by default: the tag is the source of truth there, and the firmware raises on such a
+write (touchscreen shows
 a "System Anomaly" popup). The spoolman_overrides_tag experiment switch flips that precedence
 and lets the Spoolman pick write anyway. Running in-process means the official check and the
 already-matches check read the LIVE print_task_config object, so the stale-subscription race the
@@ -98,10 +99,14 @@ def normalize_color_rgba(color_hex):
     return ""
 
 
+def _filament_record(spool):
+    return (spool or {}).get("filament") or {}
+
+
 # Spoolman stores a text extra field as a JSON string, hence the quote stripping. A field set on
 # the spool itself beats the same field on its filament: it is the more specific record.
 def _extra_field_on_the_record(spool, property_keys):
-    filament = (spool or {}).get("filament") or {}
+    filament = _filament_record(spool)
     extra_fields = {**(filament.get("extra") or {}), **((spool or {}).get("extra") or {})}
     values = (
         str(extra_fields.get(property_key) or "").strip().strip('"').strip()
@@ -142,8 +147,7 @@ def _standard_subtype_in_the_name(filament_name):
 
 
 def _subtype_inferred_from_the_name(spool):
-    filament = (spool or {}).get("filament") or {}
-    return _standard_subtype_in_the_name(filament.get("name"))
+    return _standard_subtype_in_the_name(_filament_record(spool).get("name"))
 
 
 SUBTYPE_READER_BY_SOURCE = {
@@ -159,18 +163,26 @@ def subtype_for_slicers(spool, subtype_sources=DEFAULT_SUBTYPE_SOURCES):
     return next((subtype for subtype in found if subtype), BASE_LINE_SUBTYPE)
 
 
+# The three words the printer publishes for the lane: brand, material, sub-type. Empty when the
+# record names no material, because the firmware refuses a filament type it was not given and a
+# slicer has nothing to match on.
+def _slicer_filament_fields(spool, subtype_sources):
+    filament = _filament_record(spool)
+    material = filament.get("material") or ""
+    if not material:
+        return ()
+    vendor = (filament.get("vendor") or {}).get("name") or ""
+    return (vendor, material, subtype_for_slicers(spool, subtype_sources))
+
+
 def filament_config_args_from_spool(
     spool, physical_extruder, subtype_sources=DEFAULT_SUBTYPE_SOURCES
 ):
-    filament = (spool or {}).get("filament") or {}
-    vendor = (filament.get("vendor") or {}).get("name") or ""
-    material = filament.get("material") or ""
-    color = normalize_color_rgba(filament.get("color_hex") or "")
+    color = normalize_color_rgba(_filament_record(spool).get("color_hex") or "")
+    fields = _slicer_filament_fields(spool, subtype_sources)
     args = {"CONFIG_EXTRUDER": str(physical_extruder)}
-    if material:
-        args["VENDOR"] = vendor
-        args["FILAMENT_TYPE"] = material
-        args["FILAMENT_SUBTYPE"] = subtype_for_slicers(spool, subtype_sources)
+    if fields:
+        args["VENDOR"], args["FILAMENT_TYPE"], args["FILAMENT_SUBTYPE"] = fields
     if color:
         args["FILAMENT_COLOR_RGBA"] = color
     return args
@@ -205,13 +217,14 @@ def set_print_filament_config_gcode(args):
     return f"SET_PRINT_FILAMENT_CONFIG {pairs}"
 
 
-# A vendor+name display label ("ZIRO Silk Gold") the AFC panel cannot compose itself: it shows
-# the Spoolman filament.name alone, and only when the frontend can resolve the spool.
-def composed_filament_name(spool):
-    filament = (spool or {}).get("filament") or {}
-    vendor = (filament.get("vendor") or {}).get("name") or ""
-    name = filament.get("name") or ""
-    return " ".join(part for part in (vendor, name) if part)
+# The name a person reads on the AFC lane card is the same filament description the printer
+# publishes for that lane to the slicer, "SUNLU PETG Basic". One string everywhere: the card, the
+# Device tab in Snapmaker Orca, and the preset the slicer matches. Whatever the user does to
+# control it, in Spoolman or through the sub-type sources, moves all three together. The panel
+# cannot compose this itself: it shows the Spoolman filament.name alone, and only when it can
+# resolve the spool.
+def slicer_filament_description(spool, subtype_sources=DEFAULT_SUBTYPE_SOURCES):
+    return " ".join(part for part in _slicer_filament_fields(spool, subtype_sources) if part)
 
 
 # Base64 so a name with spaces survives Klipper's whitespace-splitting gcode parser.
@@ -292,10 +305,13 @@ class PrintTaskWriter:
     # (which clears the AFC lane's name) re-labels the lane. Also called directly for
     # RFID-resolved lanes: the AFC panel only shows a name a helper pushed, so every resolved
     # lane gets its label, not just manual picks.
+    # Hands back the name it put on the lane, so a caller holding a spool record straight from
+    # Spoolman can tell whether that record named the lane or whether it has to go and ask.
     def label_lane(self, physical_extruder, spool):
-        name = composed_filament_name(spool)
+        name = slicer_filament_description(spool, self.subtype_sources)
         if name:
             self._push_name(physical_extruder, name)
+        return name
 
     # An empty label is how a lane gives its name back: the AFC panel emits the field only when
     # it is set, so blanking it restores the panel's own display instead of the last spool's name.
