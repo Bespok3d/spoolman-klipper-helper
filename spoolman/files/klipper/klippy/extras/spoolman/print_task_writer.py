@@ -289,7 +289,7 @@ class PrintTaskWriter:
                 set_print_filament_config_gcode(desired),
                 f"could not write filament config for extruder {physical_extruder}",
             )
-        self._apply_name(physical_extruder, spool)
+        return self.label_lane(physical_extruder, spool)
 
     def clear_extruder(self, physical_extruder):
         desired = filament_config_clear_args(physical_extruder)
@@ -302,11 +302,11 @@ class PrintTaskWriter:
         self.clear_lane_label(physical_extruder)
 
     # Pushed even when the persisted config already matched, so a re-pick after a restart
-    # (which clears the AFC lane's name) re-labels the lane. Also called directly for
-    # RFID-resolved lanes: the AFC panel only shows a name a helper pushed, so every resolved
-    # lane gets its label, not just manual picks.
-    # Hands back the name it put on the lane, so a caller holding a spool record straight from
-    # Spoolman can tell whether that record named the lane or whether it has to go and ask.
+    # (which clears the AFC lane's name) re-labels the lane. RFID-resolved lanes go through
+    # apply_spool, which always names the lane even when it refuses to rewrite an official
+    # channel. Hands back the name it put on the lane, so a caller holding a spool record
+    # straight from Spoolman can tell whether that record named the lane or whether it has
+    # to go and ask.
     def label_lane(self, physical_extruder, spool):
         name = slicer_filament_description(spool, self.subtype_sources)
         if name:
@@ -317,9 +317,6 @@ class PrintTaskWriter:
     # it is set, so blanking it restores the panel's own display instead of the last spool's name.
     def clear_lane_label(self, physical_extruder):
         self._push_name(physical_extruder, "")
-
-    def _apply_name(self, physical_extruder, spool):
-        self.label_lane(physical_extruder, spool)
 
     def _push_name(self, physical_extruder, name):
         self.macros.run(

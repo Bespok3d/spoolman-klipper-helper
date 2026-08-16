@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.1.36
+
+- Fix: a tagged spool resolved in Spoolman now files the same brand, material and sub-type the
+  slicer reads, not only the AFC lane name. Before, Fluidd could show `Polymaker PLA Silk` while
+  Snapmaker Orca still saw `Basic`, because a tagged lane never wrote `print_task_config`. With
+  **Spoolman pick overrides a tagged lane** on, the Spoolman record (including the `variant` field)
+  is written into the firmware config the slicer reads. Off, the tag still wins on that config and
+  only the lane name is pushed, as before.
+
 ## 0.1.35
 
 - All of this is driven by the new buttons in the AFC panel of Fluidd and Mainsail, three at the top
