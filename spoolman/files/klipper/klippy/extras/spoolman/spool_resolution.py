@@ -111,7 +111,7 @@ class SpoolResolution:
         )
         self.macros.set_spool_id_for_tool(tool, spool_id)
         self.helper.push_spool_to_afc(extruder, spool_id)
-        self._label_lane_from_spoolman(extruder, spool_id, new_spool)
+        self._apply_spoolman_to_the_lane(extruder, spool_id, new_spool)
 
     # The exact inverse of a bind, for a lane whose filament matched no spool: it must stop
     # advertising the one that was there before, in all three places a bind writes to. The holder
@@ -121,19 +121,21 @@ class SpoolResolution:
         self.helper.push_spool_to_afc(extruder, None)
         self.writer.clear_lane_label(extruder)
 
-    # The AFC panel only displays a lane name the helper pushed; an RFID-resolved lane deserves
-    # one as much as a manual pick does (the tag's own vendor/type is not the Spoolman name).
-    # A spool the helper just created comes back whole, so the lane is named in the same breath
-    # as the add. Asking Spoolman for it again left the lane unnamed until that answer arrived,
-    # and an unnamed lane card shows the one word Spoolman files a new filament under, its
-    # sub-type. A lane resolved any other way still has to ask.
-    def _label_lane_from_spoolman(self, extruder, spool_id, new_spool=None):
-        if new_spool and self.writer.label_lane(extruder, new_spool):
+    # A resolved tag is mirrored the same way a manual pick is: apply_spool writes the Spoolman
+    # record into print_task_config (what Snapmaker Orca reads) and names the AFC lane. Naming
+    # the lane alone left Orca on whatever the firmware had filed, so a tagged Silk spool could
+    # show correctly in Fluidd and still reach the slicer as Basic. apply_spool itself still
+    # refuses an official channel unless spoolman_overrides_tag is on. A spool the helper just
+    # created comes back whole, so it is applied in the same breath as the add; asking Spoolman
+    # for it again left the lane unnamed until that answer arrived. A lane resolved any other
+    # way still has to ask.
+    def _apply_spoolman_to_the_lane(self, extruder, spool_id, new_spool=None):
+        if new_spool and self.writer.apply_spool(extruder, new_spool):
             return
 
         def on_spool(spoolman_spool, target_extruder=extruder):
             if spoolman_spool:
-                self.writer.label_lane(target_extruder, spoolman_spool)
+                self.writer.apply_spool(target_extruder, spoolman_spool)
 
         self.spoolman.fetch_spool(spool_id, on_spool)
 
