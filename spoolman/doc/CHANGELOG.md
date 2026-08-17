@@ -10,6 +10,11 @@
   flag `CLEAR_ALL_SPOOLS` already uses. Without it the firmware rejects an official RFID lane with
   `official filament, not configurable`. Off, the tag still wins on that config and only the lane
   name is pushed.
+- Fix: `DETECT_SPOOLS` no longer wipes a hand-picked spool on a lane with no RFID tag. A tagged
+  lane still resolves. An untagged lane that already has a pick is re-applied, so a firmware
+  re-read cannot blank color and material. An untagged lane with no pick is left as it is: the
+  helper does not write `NONE` over a screen-set color. Pulling the filament out still releases
+  the pick; `CLEAR_ALL_SPOOLS` still clears every lane.
 
 ## 0.1.35
 

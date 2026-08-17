@@ -34,8 +34,8 @@ class SpoolResolution:
     def apply_spool_for_extruder(self, extruder):
         self.logs.verbose(f"Trying to bind spool to extruder {extruder}")
         spool = self.holders.spool_holders[extruder]
-        if not spool:
-            self.logs.verbose(f"No filament info for extruder {extruder}. Normal if no RFID tag.")
+        if not spool or is_untagged_filament(spool):
+            self._reapply_manual_pick(extruder)
             return
 
         self.logs.verbose(
@@ -52,8 +52,8 @@ class SpoolResolution:
                 spool_id = spool.get("SPOOL_ID")
 
             if not spool_id:
-                # The lane stops advertising the old spool first, because reporting the tag can
-                # end in a spool being created for it, and that one must be the last word.
+                # A tagged lane that matched nothing must stop advertising the old spool.
+                # An untagged lane never reaches here: it re-applies a hand pick or stays put.
                 self._unbind_lane_spool(extruder)
                 self._report_unresolved_tag(extruder, spool, spoolman_unanswered)
                 return
@@ -61,6 +61,19 @@ class SpoolResolution:
             self._bind_resolved_spool(extruder, spool, spool_id)
 
         self.spoolman.resolve_spool(spool, on_resolve_spool)
+
+    # FILAMENT_DT_UPDATE can blank print_task_config on a lane with no tag. A hand-picked
+    # spool_id still sitting on the tool macro is re-applied so color and material come back.
+    # No pick means the screen-set config stays: the helper does not write NONE over it.
+    def _reapply_manual_pick(self, extruder):
+        spool_id = self.macros.get_spool_id_for_tool(extruder)
+        if not spool_id:
+            self.logs.verbose(f"No filament info for extruder {extruder}. Normal if no RFID tag.")
+            return
+        self.logs.verbose(
+            f"Re-applying hand-picked spool {spool_id} on extruder {extruder}"
+        )
+        self._apply_spoolman_to_the_lane(extruder, spool_id)
 
     # A lane with nothing on it has no tag to report and nothing to search for, so it says
     # nothing. A Spoolman that never answered is not a tag that matched nothing: it gets its own

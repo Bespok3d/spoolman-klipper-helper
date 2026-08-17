@@ -330,8 +330,45 @@ def test_a_lane_with_no_tag_says_nothing_and_searches_for_nothing():
         resolve_result=None, candidates=[SPOOLMAN_SPOOL])
     helper.holders.spool_holders[0] = {"VENDOR": "NONE", "MAIN_TYPE": "", "SPOOL_ID": None}
     resolution.apply_spool_for_extruder(0)
+    assert helper.spoolman.resolved_infos == []
     assert helper.spoolman.searched_infos == []
+    assert helper.macros.tool_spool_sets == []
+    assert helper.writer.blanked_lanes == []
     assert not any("look like this tag" in line for line in helper.logs.lines)
+
+
+def test_untagged_lane_with_a_manual_pick_reapplies_that_spool():
+    resolution, helper, afc_pushes = build_resolution()
+    helper.macros.spool_id_by_tool[1] = 55
+    helper.holders.spool_holders[1] = {"VENDOR": "NONE", "MAIN_TYPE": "", "SPOOL_ID": None}
+    resolution.apply_spool_for_extruder(1)
+    assert helper.spoolman.resolved_infos == []
+    assert helper.macros.tool_spool_sets == []
+    assert afc_pushes == []
+    assert helper.writer.blanked_lanes == []
+    assert helper.writer.applied_spools == [(1, SPOOLMAN_SPOOL)]
+    assert helper.spoolman.fetched_spool_ids == [55]
+
+
+def test_empty_holder_with_a_manual_pick_reapplies_that_spool():
+    resolution, helper, afc_pushes = build_resolution()
+    helper.macros.spool_id_by_tool[2] = 55
+    resolution.apply_spool_for_extruder(2)
+    assert helper.spoolman.resolved_infos == []
+    assert helper.macros.tool_spool_sets == []
+    assert afc_pushes == []
+    assert helper.writer.applied_spools == [(2, SPOOLMAN_SPOOL)]
+
+
+def test_untagged_lane_without_a_pick_does_not_wipe_firmware_config():
+    resolution, helper, afc_pushes = build_resolution()
+    helper.holders.spool_holders[1] = {"VENDOR": "NONE", "MAIN_TYPE": "", "SPOOL_ID": None}
+    resolution.apply_spool_for_extruder(1)
+    assert helper.spoolman.resolved_infos == []
+    assert helper.macros.tool_spool_sets == []
+    assert afc_pushes == []
+    assert helper.writer.blanked_lanes == []
+    assert helper.writer.applied_spools == []
 
 
 def test_a_lane_that_matches_no_spool_gives_its_panel_name_back():

@@ -72,7 +72,14 @@ def test_out_of_range_channel_is_an_error_not_a_crash():
     assert any("Extruder must be" in line for line in logs.lines)
 
 
-def test_clear_channel_retracts_macro_var_afc_and_cache():
+def test_forget_tag_drops_the_holder_and_leaves_the_pick():
+    holders, macros, afc_pushes, _logs = build_holders()
+    holders.store_channel_report(2, dict(TAGGED))
+    holders.forget_tag(2)
+    assert holders.spool_holders[2] is None
+    assert macros.tool_spool_sets == []
+    assert afc_pushes == []
+    assert macros.cleared_task_channels == []
     holders, macros, afc_pushes, _logs = build_holders()
     holders.store_channel_report(2, dict(TAGGED))
     holders.spools_by_id[104] = TAGGED
