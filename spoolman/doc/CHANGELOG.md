@@ -13,8 +13,9 @@
 - Fix: `DETECT_SPOOLS` no longer wipes a hand-picked spool on a lane with no RFID tag. A tagged
   lane still resolves. An untagged lane that already has a pick is re-applied, so a firmware
   re-read cannot blank color and material. An untagged lane with no pick is left as it is: the
-  helper does not write `NONE` over a screen-set color. Pulling the filament out still releases
-  the pick; `CLEAR_ALL_SPOOLS` still clears every lane.
+  helper does not write `NONE` over a screen-set color. A hardware re-read that reports no tag
+  while filament is still in the lane does the same: the pick, color and material stay. Pulling
+  the filament out still releases the pick; `CLEAR_ALL_SPOOLS` still clears every lane.
 
 ## 0.1.35
 

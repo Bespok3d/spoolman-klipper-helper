@@ -171,7 +171,8 @@ Each line is: **what you have** then how the name behaves, then how color/materi
 - **Untagged, set on the screen:** no name (there is no spool); color/material come from the screen.
 - **Untagged, picked in Spoolman:** name shows live from the pick; the bridge writes color/material
   so the screen and AFC agree, and makes the picked spool the active/tracked spool. `DETECT_SPOOLS`
-  keeps that pick: a lane with no tag is not cleared just because the re-read found no RFID.
+  keeps that pick: a lane with no tag is not cleared just because the re-read found no RFID, and
+  color and material are written back if the firmware re-read blanked them.
 - **Untagged, loaded but not picked:** shown as `UNKNOWN` (present but unidentified) rather than
   empty, in the helper's logs and `DUMP_SPOOLS`.
 - **Untagged, picked mid-print:** name and the active spool update live; only the firmware
@@ -234,7 +235,8 @@ slicer:
   detect properly: it forces the detection again without you pulling the spool off the printer and
   putting it back on. Tagged lanes resolve from RFID. Untagged lanes that already have a Spoolman
   pick keep that pick (color and material are written back if the firmware re-read blanked them).
-  Untagged lanes with no pick are left as they are.
+  Untagged lanes with no pick are left as they are. A re-read that finds no tag while filament is
+  still loaded does not clear the pick either.
 - `DUMP_SPOOLS` prints what the bridge knows about each lane (labelled `T0:`..`T3:`; an empty lane
   reads `empty`, a manually assigned one shows the spool).
 - `SH_CONFIG MODE=<auto|manual> LOGS=<level>` changes the module's behavior at runtime

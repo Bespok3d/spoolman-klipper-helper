@@ -358,6 +358,7 @@ def test_empty_holder_with_a_manual_pick_reapplies_that_spool():
     assert helper.macros.tool_spool_sets == []
     assert afc_pushes == []
     assert helper.writer.applied_spools == [(2, SPOOLMAN_SPOOL)]
+    assert helper.writer.blanked_lanes == []
 
 
 def test_untagged_lane_without_a_pick_does_not_wipe_firmware_config():

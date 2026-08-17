@@ -119,6 +119,20 @@ def test_detect_without_a_rfid_file_still_runs(tmp_path):
     assert helper.resolution.applied_extruders == [0]
 
 
+def test_detect_sends_every_lane_through_resolution_including_untagged_picks(tmp_path):
+    # Tagged, untagged-with-pick, and untagged-without-pick all go through apply.
+    # Resolution, not detection, decides whether to resolve, re-apply, or leave alone.
+    detection, helper, _afc_pushes = build_detection(
+        tmp_path, spools_config=[{}, {}, {}, {}]
+    )
+    helper.holders.spool_holders[0] = dict(TAGGED)
+    helper.holders.spool_holders[1] = {"VENDOR": "NONE", "MAIN_TYPE": "", "SPOOL_ID": None}
+    helper.macros.spool_id_by_tool[1] = 55
+    detection.detect_spools()
+    assert helper.macros.detected_channels == [0, 1, 2, 3]
+    assert helper.resolution.applied_extruders == [0, 1, 2, 3]
+
+
 def test_sync_in_auto_mode_is_a_noop_because_the_map_is_live(tmp_path):
     detection, helper, afc_pushes = build_detection(tmp_path, spools_config=[])
     detection.sync_spools_tools()

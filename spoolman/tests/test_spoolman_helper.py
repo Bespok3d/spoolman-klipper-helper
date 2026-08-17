@@ -28,6 +28,34 @@ TAGGED = {
     "VENDOR": "ELEGOO", "MAIN_TYPE": "PLA", "SUB_TYPE": "Matte",
     "ARGB_COLOR": "1D6C6AFF", "SPOOL_ID": 104, "SKU": "abc",
 }
+SPOOLMAN_SPOOL = {
+    "id": 55,
+    "filament": {
+        "name": "PLA Matte",
+        "material": "PLA",
+        "color_hex": "1D6C6A",
+        "vendor": {"name": "ELEGOO"},
+    },
+}
+
+
+def stub_spool_fetch(helper, spool=None):
+    fetched = []
+    record = spool or SPOOLMAN_SPOOL
+
+    def fetch_spool(spool_id, on_spool):
+        fetched.append(spool_id)
+        on_spool(record)
+
+    helper.spoolman.fetch_spool = fetch_spool
+    return fetched
+
+
+def scripts_after(printer, action):
+    gcode = printer.objects["gcode"]
+    already_emitted = len(gcode.scripts)
+    action()
+    return gcode.scripts[already_emitted:]
 
 
 class RecordingGcode:
@@ -186,6 +214,38 @@ def test_a_clear_report_keeps_the_pick_when_filament_is_still_there(tmp_path):
     )
 
 
+def test_a_clear_report_keeps_a_manual_pick_and_reapplies_it(tmp_path):
+    helper, printer = boot_helper(tmp_path)
+    fetched = stub_spool_fetch(helper)
+    printer.objects["gcode_macro T0"].variables["spool_id"] = 55
+    notify = printer.objects["bespok3d_rfid"].notify_callbacks[0]
+    new_scripts = scripts_after(printer, lambda: notify(0, None, True))
+    assert printer.objects["gcode_macro T0"].variables["spool_id"] == 55
+    assert helper.holders.spool_holders[0] is None
+    assert fetched == [55]
+    assert not any("VALUE=None" in script for script in new_scripts)
+    assert any(
+        script.startswith("SET_PRINT_FILAMENT_CONFIG CONFIG_EXTRUDER=0")
+        and "VENDOR=\"ELEGOO\"" in script
+        for script in new_scripts
+    )
+    assert any(
+        script.startswith("SET_LANE_FILAMENT_NAME EXTRUDER=0 NAME_B64=")
+        and not script.endswith("NAME_B64=")
+        for script in new_scripts
+    )
+
+
+def test_a_clear_report_releases_a_manual_pick_when_the_lane_is_empty(tmp_path):
+    _helper, printer = boot_helper(tmp_path)
+    printer.objects["print_task_config"].print_task_config["filament_exist"][0] = False
+    printer.objects["gcode_macro T0"].variables["spool_id"] = 55
+    notify = printer.objects["bespok3d_rfid"].notify_callbacks[0]
+    new_scripts = scripts_after(printer, lambda: notify(0, None, True))
+    assert "SET_GCODE_VARIABLE MACRO=T0 VARIABLE=spool_id VALUE=None" in new_scripts
+    assert "SET_LANE_FILAMENT_NAME EXTRUDER=0 NAME_B64=" in new_scripts
+
+
 def test_a_spool_taken_off_a_lane_gives_the_panel_name_back(tmp_path):
     _helper, printer = boot_helper(tmp_path)
     printer.objects["print_task_config"].print_task_config["filament_exist"][0] = False
@@ -202,3 +262,45 @@ def test_clearing_no_particular_lane_leaves_every_lane_name_alone(tmp_path):
         script for script in printer.objects["gcode"].scripts
         if script.startswith("SET_LANE_FILAMENT_NAME")
     ]
+
+
+def test_detect_spools_reapplies_a_manual_pick_without_unbinding(tmp_path):
+    helper, printer = boot_helper(tmp_path)
+    fetched = stub_spool_fetch(helper)
+    printer.objects["gcode_macro T1"].variables["spool_id"] = 55
+    helper.holders.spool_holders[1] = {"VENDOR": "NONE", "MAIN_TYPE": "", "SPOOL_ID": None}
+    new_scripts = scripts_after(printer, helper.detect_spools)
+    assert printer.objects["gcode_macro T1"].variables["spool_id"] == 55
+    assert fetched == [55]
+    assert not any("VALUE=None" in script for script in new_scripts)
+    assert any(
+        script.startswith("SET_PRINT_FILAMENT_CONFIG CONFIG_EXTRUDER=1")
+        for script in new_scripts
+    )
+
+
+def test_detect_spools_resolves_a_tagged_lane(tmp_path):
+    helper, printer = boot_helper(tmp_path)
+    stub_spool_fetch(helper, {**SPOOLMAN_SPOOL, "id": 104})
+    (tmp_path / "print_task.json").write_text(json.dumps({
+        "extruder_map_table": [0, 1, 2, 3],
+        "filament_vendor": ["ELEGOO", "NONE", "NONE", "NONE"],
+        "filament_type": ["PLA", "NONE", "NONE", "NONE"],
+        "filament_sub_type": ["Matte", "NONE", "NONE", "NONE"],
+    }))
+    helper.holders.spool_holders[0] = dict(TAGGED)
+    new_scripts = scripts_after(printer, helper.detect_spools)
+    assert "SET_GCODE_VARIABLE MACRO=T0 VARIABLE=spool_id VALUE=104" in new_scripts
+
+
+def test_detect_spools_leaves_an_untagged_lane_without_a_pick_alone(tmp_path):
+    helper, printer = boot_helper(tmp_path)
+    helper.holders.spool_holders[2] = {"VENDOR": "NONE", "MAIN_TYPE": "", "SPOOL_ID": None}
+    new_scripts = scripts_after(printer, helper.detect_spools)
+    assert not any("VALUE=None" in script for script in new_scripts)
+    assert not any(
+        script.startswith("SET_PRINT_FILAMENT_CONFIG") for script in new_scripts
+    )
+    assert not any(
+        script.startswith("SET_LANE_FILAMENT_NAME") for script in new_scripts
+    )
