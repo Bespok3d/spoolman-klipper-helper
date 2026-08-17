@@ -187,8 +187,10 @@ Each line is: **what you have** then how the name behaves, then how color/materi
 ### Gotchas
 
 - The bridge never writes an official tagged lane unless **Spoolman pick overrides a tagged lane**
-  is on, and even then it writes without `FORCE`. Off, the tag stays the source of truth for
-  color, material and sub-type; the AFC name still comes from Spoolman.
+  is on. On, it sends `FORCE=1` so the firmware accepts the Spoolman brand, material and sub-type
+  on a tagged lane (without that flag it raises `official filament, not configurable`). Off, the
+  tag stays the source of truth for color, material and sub-type; the AFC name still comes from
+  Spoolman.
 - It acts only on the 4 physical lanes (the tools that map to physical extruders 0 to 3 in the
   U1's virtual-tool table). A virtual tool with no physical mapping is skipped.
 - A spool picked while a print is running or paused is **deferred**: the name updates live, and
@@ -262,8 +264,8 @@ slicer:
   Spoolman record is written there too, so a tagged spool with `variant` Silk is announced as Silk,
   not whatever the firmware had filed. Coming from the extended firmware, if your spool profiles
   depend on Spoolman: turn this on, or a tagged lane goes by what is written on the tag and your
-  Spoolman profile is ignored. On still writes without `FORCE`: the printer may refuse to change a
-  tagged lane.
+  Spoolman profile is ignored. On sends `FORCE=1`, because the firmware otherwise refuses to change
+  a tagged lane.
 - **Where the sub-type comes from** (`sub_type,variant,name_inferred` by default): the order the
   three sub-type sources are tried in, first one with a value wins. Reorder them to change which
   wins, drop one to stop reading it at all. See

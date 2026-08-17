@@ -6,8 +6,10 @@
   slicer reads, not only the AFC lane name. Before, Fluidd could show `Polymaker PLA Silk` while
   Snapmaker Orca still saw `Basic`, because a tagged lane never wrote `print_task_config`. With
   **Spoolman pick overrides a tagged lane** on, the Spoolman record (including the `variant` field)
-  is written into the firmware config the slicer reads. Off, the tag still wins on that config and
-  only the lane name is pushed, as before.
+  is written into the firmware config the slicer reads, and that write sends `FORCE=1`, the same
+  flag `CLEAR_ALL_SPOOLS` already uses. Without it the firmware rejects an official RFID lane with
+  `official filament, not configurable`. Off, the tag still wins on that config and only the lane
+  name is pushed.
 
 ## 0.1.35
 
