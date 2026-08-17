@@ -86,10 +86,17 @@ class SpoolmanHelper:
         self.logs.warn("No notification source available, spool tracking disabled")
 
     def _on_filament_update(self, channel, info, is_clear):
-        if is_clear:
-            self.clear_spool_for_channel(channel)
-        else:
+        if not is_clear:
             self.set_spool_for_channel(channel, info)
+            return
+        # A re-read with no tag is not an empty lane. Filament still sitting in the
+        # channel keeps its hand-picked spool, color and material; only a sensor that
+        # says the channel is empty may wipe them.
+        if self._lane_has_filament(channel):
+            self.holders.forget_tag(channel)
+            self.apply_spool_for_extruder(channel)
+            return
+        self.clear_spool_for_channel(channel)
 
     def push_spool_to_afc(self, channel, spool_id):
         push_spool_to_afc(self.printer, channel, spool_id, EXTRUDERS_COUNT)

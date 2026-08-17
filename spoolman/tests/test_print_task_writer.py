@@ -5,6 +5,7 @@ import base64
 from print_task_writer import (
     PrintTaskWriter,
     config_already_matches,
+    filament_config_args_forcing_an_official_channel,
     filament_config_args_from_spool,
     filament_config_clear_args,
     normalize_color_rgba,
@@ -294,11 +295,28 @@ def test_a_tagged_lane_is_never_overwritten_with_spoolman_data():
 
 def test_the_override_switch_lets_a_spoolman_pick_rewrite_a_tagged_lane():
     # The experiment switch: precedence flips, so the same tagged lane is written after all.
+    # FORCE=1 is required; without it the firmware raises "official filament, not configurable".
     task = empty_task_config()
     task["filament_official"][3] = True
     writer, macros = build_writer(task, spoolman_overrides_tag=True)
     writer.apply_spool(3, SPOOL)
-    assert macros.commands[0] == EXPECTED_GCODE
+    assert macros.commands[0] == (
+        'SET_PRINT_FILAMENT_CONFIG CONFIG_EXTRUDER=3 FORCE=1 VENDOR="FlashForge" '
+        'FILAMENT_TYPE="PLA" FILAMENT_SUBTYPE="Basic" FILAMENT_COLOR_RGBA=3FD2C5FF'
+    )
+
+
+def test_an_untagged_write_does_not_send_force():
+    writer, macros = build_writer(empty_task_config())
+    writer.apply_spool(3, SPOOL)
+    assert "FORCE=" not in macros.commands[0]
+
+
+def test_forcing_an_official_channel_inserts_force_after_the_extruder():
+    forced = filament_config_args_forcing_an_official_channel(
+        filament_config_args_from_spool(SPOOL, 3))
+    assert list(forced)[:2] == ["CONFIG_EXTRUDER", "FORCE"]
+    assert forced["FORCE"] == "1"
 
 
 def test_apply_spool_skips_matching_config_but_still_pushes_name():

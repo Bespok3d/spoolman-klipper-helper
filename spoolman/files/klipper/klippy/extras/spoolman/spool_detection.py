@@ -2,10 +2,12 @@
 
 DETECT_SPOOLS re-reads what the printer already knows: the firmware's print-task spool fields
 enrich the holders, persisted tag data (rfid_data.json, written by the RFID substrate) restores
-identified lanes across a restart, then every channel re-reads its tag and re-resolves. The
-print-start sync refreshes the tool map (auto mode) or re-resolves every manual macro pick
-(manual mode). The data-file path is injected: where the file lives on a given machine is
-deployment knowledge, not this module's.
+identified lanes across a restart, then every channel re-reads its tag. A tagged lane resolves
+as usual. An untagged lane with a hand-picked spool re-applies that pick (the firmware re-read
+can wipe color and material). An untagged lane with no pick is left alone: the helper does not
+write NONE over a screen-set color. The print-start sync refreshes the tool map (auto mode) or
+re-resolves every manual macro pick (manual mode). The data-file path is injected: where the
+file lives on a given machine is deployment knowledge, not this module's.
 """
 import json
 
@@ -34,6 +36,7 @@ class SpoolDetection:
 
         for extruder in range(len(detected_spools)):
             self.macros.detect_spool(extruder)
+            # Tagged: resolve. Untagged with a pick: re-apply. Untagged with none: leave it.
             self.resolution.apply_spool_for_extruder(extruder)
 
     def _load_rfid_data(self):

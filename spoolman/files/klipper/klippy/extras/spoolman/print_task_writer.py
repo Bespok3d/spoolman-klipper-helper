@@ -7,7 +7,8 @@ slicer gets is put on the lane card with SET_LANE_FILAMENT_NAME. RFID-tagged (of
 not written by default: the tag is the source of truth there, and the firmware raises on such a
 write (touchscreen shows
 a "System Anomaly" popup). The spoolman_overrides_tag experiment switch flips that precedence
-and lets the Spoolman pick write anyway. Running in-process means the official check and the
+and lets the Spoolman pick write anyway, with FORCE=1 so the firmware accepts it on an official
+channel. Running in-process means the official check and the
 already-matches check read the LIVE print_task_config object, so the stale-subscription race the
 old Moonraker bridge had does not exist here.
 
@@ -217,6 +218,18 @@ def set_print_filament_config_gcode(args):
     return f"SET_PRINT_FILAMENT_CONFIG {pairs}"
 
 
+# The firmware refuses SET_PRINT_FILAMENT_CONFIG on an official (RFID-tagged) channel unless
+# FORCE=1 is present, the same flag CLEAR_ALL_SPOOLS already sends. Inserted after
+# CONFIG_EXTRUDER so the command matches that reset's shape.
+def filament_config_args_forcing_an_official_channel(args):
+    forced = {}
+    for key, value in args.items():
+        forced[key] = value
+        if key == "CONFIG_EXTRUDER":
+            forced["FORCE"] = "1"
+    return forced
+
+
 # The name a person reads on the AFC lane card is the same filament description the printer
 # publishes for that lane to the slicer, "SUNLU PETG Basic". One string everywhere: the card, the
 # Device tab in Snapmaker Orca, and the preset the slicer matches. Whatever the user does to
@@ -251,8 +264,9 @@ def channel_is_official(filament_official, physical_extruder):
 
 
 class PrintTaskWriter:
-    # spoolman_overrides_tag flips the lane precedence for experiments: the Spoolman pick then
-    # rewrites even a tag-filed (official) channel. Off, the tag stays the source of truth.
+    # spoolman_overrides_tag flips the lane precedence: the Spoolman record then rewrites even a
+    # tag-filed (official) channel, and FORCE=1 goes with that write so the firmware accepts it.
+    # Off, the tag stays the source of truth.
     def __init__(
         self,
         printer,
@@ -266,6 +280,11 @@ class PrintTaskWriter:
         self.macros = macros
         self.spoolman_overrides_tag = spoolman_overrides_tag
         self.subtype_sources = subtype_sources
+
+    def _firmware_write_args(self, desired):
+        if not self.spoolman_overrides_tag:
+            return desired
+        return filament_config_args_forcing_an_official_channel(desired)
 
     def _live_task_config(self):
         task = self.printer.lookup_object("print_task_config", None)
@@ -286,27 +305,28 @@ class PrintTaskWriter:
             return
         if self._should_write(physical_extruder, desired):
             self.macros.run(
-                set_print_filament_config_gcode(desired),
+                set_print_filament_config_gcode(self._firmware_write_args(desired)),
                 f"could not write filament config for extruder {physical_extruder}",
             )
-        self._apply_name(physical_extruder, spool)
+        return self.label_lane(physical_extruder, spool)
 
     def clear_extruder(self, physical_extruder):
         desired = filament_config_clear_args(physical_extruder)
         if not self._should_write(physical_extruder, desired):
             return
         self.macros.run(
-            set_print_filament_config_gcode(desired),
+            set_print_filament_config_gcode(self._firmware_write_args(desired)),
             f"could not clear filament config for extruder {physical_extruder}",
         )
         self.clear_lane_label(physical_extruder)
 
     # Pushed even when the persisted config already matched, so a re-pick after a restart
-    # (which clears the AFC lane's name) re-labels the lane. Also called directly for
-    # RFID-resolved lanes: the AFC panel only shows a name a helper pushed, so every resolved
-    # lane gets its label, not just manual picks.
-    # Hands back the name it put on the lane, so a caller holding a spool record straight from
-    # Spoolman can tell whether that record named the lane or whether it has to go and ask.
+    # (which clears the AFC lane's name) re-labels the lane. RFID-resolved lanes go through
+    # apply_spool, which always names the lane even when it leaves an official channel
+    # alone (override off). With the override on, apply_spool also sends FORCE=1 so the
+    # firmware accepts the Spoolman sub-type on a tagged lane. Hands back the name it put
+    # on the lane, so a caller holding a spool record straight from Spoolman can tell
+    # whether that record named the lane or whether it has to go and ask.
     def label_lane(self, physical_extruder, spool):
         name = slicer_filament_description(spool, self.subtype_sources)
         if name:
@@ -317,9 +337,6 @@ class PrintTaskWriter:
     # it is set, so blanking it restores the panel's own display instead of the last spool's name.
     def clear_lane_label(self, physical_extruder):
         self._push_name(physical_extruder, "")
-
-    def _apply_name(self, physical_extruder, spool):
-        self.label_lane(physical_extruder, spool)
 
     def _push_name(self, physical_extruder, name):
         self.macros.run(

@@ -85,6 +85,11 @@ class RecordingRfid:
         self.notify_callbacks.append(callback)
 
 
+class FakePrintTask:
+    def __init__(self):
+        self.print_task_config = {"filament_exist": [True, True, True, True]}
+
+
 class FakePrinter:
     def __init__(self, config_dir):
         self.config_dir = config_dir
@@ -92,6 +97,7 @@ class FakePrinter:
         self.event_handlers = {}
         self.objects = {"gcode": RecordingGcode(), "bespok3d_rfid": RecordingRfid()}
         self.objects["webhooks"] = RecordingWebhooks(self)
+        self.objects["print_task_config"] = FakePrintTask()
         for tool_index in range(4):
             self.objects[f"gcode_macro T{tool_index}"] = FakeMacroObject()
 
@@ -157,6 +163,7 @@ def test_a_tag_report_routes_through_resolution_to_the_tool_macro(tmp_path):
 
 def test_a_clear_report_releases_the_tool_macro(tmp_path):
     _helper, printer = boot_helper(tmp_path)
+    printer.objects["print_task_config"].print_task_config["filament_exist"][0] = False
     notify = printer.objects["bespok3d_rfid"].notify_callbacks[0]
     notify(0, dict(TAGGED), False)
     notify(0, None, True)
@@ -165,8 +172,23 @@ def test_a_clear_report_releases_the_tool_macro(tmp_path):
     )
 
 
+def test_a_clear_report_keeps_the_pick_when_filament_is_still_there(tmp_path):
+    helper, printer = boot_helper(tmp_path)
+    notify = printer.objects["bespok3d_rfid"].notify_callbacks[0]
+    notify(0, dict(TAGGED), False)
+    scripts_after_the_tag = list(printer.objects["gcode"].scripts)
+    notify(0, None, True)
+    new_scripts = printer.objects["gcode"].scripts[len(scripts_after_the_tag):]
+    assert helper.holders.spool_holders[0] is None
+    assert not any("VALUE=None" in script for script in new_scripts)
+    assert not any(
+        script.startswith("SET_LANE_FILAMENT_NAME") for script in new_scripts
+    )
+
+
 def test_a_spool_taken_off_a_lane_gives_the_panel_name_back(tmp_path):
     _helper, printer = boot_helper(tmp_path)
+    printer.objects["print_task_config"].print_task_config["filament_exist"][0] = False
     notify = printer.objects["bespok3d_rfid"].notify_callbacks[0]
     notify(0, dict(TAGGED), False)
     notify(0, None, True)
