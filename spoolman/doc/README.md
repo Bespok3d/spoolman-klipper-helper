@@ -171,8 +171,9 @@ Each line is: **what you have** then how the name behaves, then how color/materi
 - **Untagged, set on the screen:** no name (there is no spool); color/material come from the screen.
 - **Untagged, picked in Spoolman:** name shows live from the pick; the bridge writes color/material
   so the screen and AFC agree, and makes the picked spool the active/tracked spool. `DETECT_SPOOLS`
-  keeps that pick: a lane with no tag is not cleared just because the re-read found no RFID, and
-  color and material are written back if the firmware re-read blanked them.
+  keeps that pick whether you chose it on the printer or in the AFC panel: a lane with no tag is
+  not cleared just because the re-read found no RFID, and color and material are written back if
+  the firmware re-read blanked them.
 - **Untagged, loaded but not picked:** shown as `UNKNOWN` (present but unidentified) rather than
   empty, in the helper's logs and `DUMP_SPOOLS`.
 - **Untagged, picked mid-print:** name and the active spool update live; only the firmware
@@ -233,10 +234,10 @@ slicer:
 - `CLEAR_ALL_SPOOLS` clears the selected spool for every tool, including RFID-tagged lanes.
 - `DETECT_SPOOLS` re-detects every loaded spool. It is the last line of defence when something did not
   detect properly: it forces the detection again without you pulling the spool off the printer and
-  putting it back on. Tagged lanes resolve from RFID. Untagged lanes that already have a Spoolman
-  pick keep that pick (color and material are written back if the firmware re-read blanked them).
-  Untagged lanes with no pick are left as they are. A re-read that finds no tag while filament is
-  still loaded does not clear the pick either.
+  putting it back on. Tagged lanes resolve from RFID and replace the previous pick. Untagged lanes
+  that already have a Spoolman pick, chosen on the printer or in the AFC panel, keep that pick
+  (color and material are written back if the firmware re-read blanked them). Untagged lanes with
+  no pick are left as they are.
 - `DUMP_SPOOLS` prints what the bridge knows about each lane (labelled `T0:`..`T3:`; an empty lane
   reads `empty`, a manually assigned one shows the spool).
 - `SH_CONFIG MODE=<auto|manual> LOGS=<level>` changes the module's behavior at runtime
@@ -366,9 +367,10 @@ The two manual routes still work and still stop a tag from missing in the first 
 Whenever a lane looks wrong for any other reason, `DETECT_SPOOLS` is the last line of defence: it
 re-reads every lane and resolves the tagged ones again, so you can force the detection without
 rebooting and without pulling the spool off the printer and putting it back on. A lane with no tag
-keeps the spool you picked by hand, and a lane with no pick keeps the color and material already
-on the screen. It is the retry, not the cure: if Spoolman genuinely has no filament matching that
-tag, `DETECT_SPOOLS` fails exactly the same way, and the two fixes above are what stop it for good.
+keeps the spool you picked by hand, on the printer or in the AFC panel, and a lane with no pick
+keeps the color and material already on the screen. It is the retry, not the cure: if Spoolman
+genuinely has no filament matching that tag, `DETECT_SPOOLS` fails exactly the same way, and the
+two fixes above are what stop it for good.
 
 ## Troubleshooting
 

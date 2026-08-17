@@ -94,6 +94,7 @@ class SpoolTracking:
             return
         self.logs.log(f"AFC panel pick: spool {picked or 'none'} -> T{lane_index}")
         self.helper.macros.set_spool_id_for_tool(f"T{lane_index}", picked)
+        self.on_pick(lane_index, picked, state)
 
     # Mid-print a runout is the firmware's to handle; only an idle pull releases the lane's
     # manual assignment (an untagged spool fires no RFID event when removed).

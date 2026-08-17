@@ -8,6 +8,8 @@ the helper's runtime mode. The by-hand entries live here too: SH_BIND_CARD_UID b
 currently sitting on a channel to a chosen spool, and SH_ADD_SPOOL_FROM_TAG turns that tag into
 a spool of its own.
 """
+from .active_spool import coerce_spool_id
+from .afc import lane_spool_id
 from .card_uids import trackable_uid
 from .filament_info import filament_info_to_string, is_untagged_filament
 from .u1_tools import EXTRUDERS_COUNT
@@ -62,17 +64,31 @@ class SpoolResolution:
 
         self.spoolman.resolve_spool(spool, on_resolve_spool)
 
+    def current_manual_pick(self, extruder):
+        return (
+            coerce_spool_id(self.macros.get_spool_id_for_tool(extruder))
+            or coerce_spool_id(lane_spool_id(self.helper.printer, extruder))
+        )
+
     # FILAMENT_DT_UPDATE can blank print_task_config on a lane with no tag. A hand-picked
-    # spool_id still sitting on the tool macro is re-applied so color and material come back.
-    # No pick means the screen-set config stays: the helper does not write NONE over it.
+    # spool_id still sitting on the tool macro or the AFC lane is re-applied so color and
+    # material come back. No pick means the screen-set config stays: the helper does not
+    # write NONE over it.
     def _reapply_manual_pick(self, extruder):
-        spool_id = self.macros.get_spool_id_for_tool(extruder)
+        self.reapply_preserved_pick(extruder, self.current_manual_pick(extruder))
+
+    def reapply_preserved_pick(self, extruder, spool_id):
+        spool_id = coerce_spool_id(spool_id)
         if not spool_id:
             self.logs.verbose(f"No filament info for extruder {extruder}. Normal if no RFID tag.")
             return
         self.logs.verbose(
             f"Re-applying hand-picked spool {spool_id} on extruder {extruder}"
         )
+        if coerce_spool_id(self.macros.get_spool_id_for_tool(extruder)) != spool_id:
+            self.macros.set_spool_id_for_tool(f"T{extruder}", spool_id)
+        self.helper.push_spool_to_afc(extruder, spool_id)
+        self.helper.remember_manual_spool(extruder, spool_id)
         self._apply_spoolman_to_the_lane(extruder, spool_id)
 
     # A lane with nothing on it has no tag to report and nothing to search for, so it says

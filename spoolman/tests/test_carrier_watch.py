@@ -143,6 +143,7 @@ def test_afc_lane_spool_present_at_baseline_is_not_a_pick():
     watch._sample()
     watch._sample()
     assert all(call[0] != "lane_pick" for call in tracking.calls)
+    assert watch.spool_by_lane[0] == 94
 
 
 def test_leaving_an_active_print_fires_drain():

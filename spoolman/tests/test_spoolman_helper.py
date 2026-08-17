@@ -113,6 +113,11 @@ class RecordingRfid:
         self.notify_callbacks.append(callback)
 
 
+class FakeAfcLane:
+    def __init__(self, spool_id=None):
+        self.spool_id = spool_id
+
+
 class FakePrintTask:
     def __init__(self):
         self.print_task_config = {"filament_exist": [True, True, True, True]}
@@ -126,8 +131,10 @@ class FakePrinter:
         self.objects = {"gcode": RecordingGcode(), "bespok3d_rfid": RecordingRfid()}
         self.objects["webhooks"] = RecordingWebhooks(self)
         self.objects["print_task_config"] = FakePrintTask()
+        self.objects["AFC"] = object()
         for tool_index in range(4):
             self.objects[f"gcode_macro T{tool_index}"] = FakeMacroObject()
+            self.objects[f"AFC_lane E{tool_index}"] = FakeAfcLane()
 
     def lookup_object(self, name, default=KeyError):
         if name in self.objects:
@@ -164,8 +171,21 @@ def boot_helper(tmp_path):
     }))
     printer = FakePrinter(str(tmp_path))
     helper = SpoolmanHelper(FakeConfig(printer))
+    helper.manual_restore.manual_spools_path = str(tmp_path / "manual_spools.json")
     printer.event_handlers["klippy:ready"]()
+    finish_detect(helper, printer)
     return helper, printer
+
+
+def finish_detect(helper, printer, reports=None):
+    notify = printer.objects["bespok3d_rfid"].notify_callbacks[0]
+    reports = reports or {}
+    for channel in list(helper.detection.pending_picks):
+        info, is_clear = reports.get(channel, (None, True))
+        notify(channel, info, is_clear)
+
+
+UNTAGGED = {"VENDOR": "NONE", "MAIN_TYPE": "NONE", "SPOOL_ID": None}
 
 
 def test_boot_registers_commands_hooks_and_the_watcher(tmp_path):
@@ -209,9 +229,7 @@ def test_a_clear_report_keeps_the_pick_when_filament_is_still_there(tmp_path):
     new_scripts = printer.objects["gcode"].scripts[len(scripts_after_the_tag):]
     assert helper.holders.spool_holders[0] is None
     assert not any("VALUE=None" in script for script in new_scripts)
-    assert not any(
-        script.startswith("SET_LANE_FILAMENT_NAME") for script in new_scripts
-    )
+    assert printer.objects["AFC_lane E0"].spool_id == 104
 
 
 def test_a_clear_report_keeps_a_manual_pick_and_reapplies_it(tmp_path):
@@ -269,7 +287,8 @@ def test_detect_spools_reapplies_a_manual_pick_without_unbinding(tmp_path):
     fetched = stub_spool_fetch(helper)
     printer.objects["gcode_macro T1"].variables["spool_id"] = 55
     helper.holders.spool_holders[1] = {"VENDOR": "NONE", "MAIN_TYPE": "", "SPOOL_ID": None}
-    new_scripts = scripts_after(printer, helper.detect_spools)
+    helper.detect_spools()
+    new_scripts = scripts_after(printer, lambda: finish_detect(helper, printer))
     assert printer.objects["gcode_macro T1"].variables["spool_id"] == 55
     assert fetched == [55]
     assert not any("VALUE=None" in script for script in new_scripts)
@@ -289,14 +308,18 @@ def test_detect_spools_resolves_a_tagged_lane(tmp_path):
         "filament_sub_type": ["Matte", "NONE", "NONE", "NONE"],
     }))
     helper.holders.spool_holders[0] = dict(TAGGED)
-    new_scripts = scripts_after(printer, helper.detect_spools)
+    helper.detect_spools()
+    new_scripts = scripts_after(
+        printer, lambda: finish_detect(helper, printer, {0: (dict(TAGGED), False)})
+    )
     assert "SET_GCODE_VARIABLE MACRO=T0 VARIABLE=spool_id VALUE=104" in new_scripts
 
 
 def test_detect_spools_leaves_an_untagged_lane_without_a_pick_alone(tmp_path):
     helper, printer = boot_helper(tmp_path)
     helper.holders.spool_holders[2] = {"VENDOR": "NONE", "MAIN_TYPE": "", "SPOOL_ID": None}
-    new_scripts = scripts_after(printer, helper.detect_spools)
+    helper.detect_spools()
+    new_scripts = scripts_after(printer, lambda: finish_detect(helper, printer))
     assert not any("VALUE=None" in script for script in new_scripts)
     assert not any(
         script.startswith("SET_PRINT_FILAMENT_CONFIG") for script in new_scripts
@@ -304,3 +327,48 @@ def test_detect_spools_leaves_an_untagged_lane_without_a_pick_alone(tmp_path):
     assert not any(
         script.startswith("SET_LANE_FILAMENT_NAME") for script in new_scripts
     )
+
+
+def test_detect_spools_keeps_an_afc_pick_when_the_sensor_says_empty(tmp_path):
+    helper, printer = boot_helper(tmp_path)
+    fetched = stub_spool_fetch(helper, {**SPOOLMAN_SPOOL, "id": 94})
+    printer.objects["print_task_config"].print_task_config["filament_exist"] = [
+        False, False, False, False
+    ]
+    printer.objects["AFC_lane E0"].spool_id = 94
+    helper.detect_spools()
+    new_scripts = scripts_after(printer, lambda: finish_detect(helper, printer))
+    assert "SET_GCODE_VARIABLE MACRO=T0 VARIABLE=spool_id VALUE=94" in new_scripts
+    assert printer.objects["AFC_lane E0"].spool_id == 94
+    assert fetched == [94]
+    assert not any("VALUE=None" in script for script in new_scripts)
+    assert any(
+        script.startswith("SET_PRINT_FILAMENT_CONFIG CONFIG_EXTRUDER=0")
+        for script in new_scripts
+    )
+
+
+def test_detect_spools_keeps_an_afc_pick_on_an_untagged_report(tmp_path):
+    helper, printer = boot_helper(tmp_path)
+    fetched = stub_spool_fetch(helper, {**SPOOLMAN_SPOOL, "id": 94})
+    printer.objects["AFC_lane E2"].spool_id = 94
+    helper.detect_spools()
+    new_scripts = scripts_after(
+        printer, lambda: finish_detect(helper, printer, {2: (dict(UNTAGGED), False)})
+    )
+    assert "SET_GCODE_VARIABLE MACRO=T2 VARIABLE=spool_id VALUE=94" in new_scripts
+    assert printer.objects["AFC_lane E2"].spool_id == 94
+    assert fetched == [94]
+    assert not any("VALUE=None" in script for script in new_scripts)
+
+
+def test_detect_spools_lets_a_fresh_tag_replace_an_afc_pick(tmp_path):
+    helper, printer = boot_helper(tmp_path)
+    stub_spool_fetch(helper, {**SPOOLMAN_SPOOL, "id": 104})
+    printer.objects["AFC_lane E0"].spool_id = 94
+    printer.objects["gcode_macro T0"].variables["spool_id"] = 94
+    helper.detect_spools()
+    new_scripts = scripts_after(
+        printer, lambda: finish_detect(helper, printer, {0: (dict(TAGGED), False)})
+    )
+    assert "SET_GCODE_VARIABLE MACRO=T0 VARIABLE=spool_id VALUE=104" in new_scripts

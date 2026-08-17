@@ -308,6 +308,8 @@ def test_afc_panel_pick_lands_on_the_lanes_home_tool():
     tracking.on_primed({}, None, afc_present=True)
     tracking.on_afc_lane_pick(0, 94, "standby")
     assert macros.tool_spool_sets == [("T0", 94)]
+    assert tracking.helper.remembered == [(0, 94)]
+    assert tracking.helper.afc_pushes == [(0, 94)]
     assert any("AFC panel pick" in line for line in logs.lines)
 
 

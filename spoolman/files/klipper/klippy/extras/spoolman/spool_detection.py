@@ -2,15 +2,19 @@
 
 DETECT_SPOOLS re-reads what the printer already knows: the firmware's print-task spool fields
 enrich the holders, persisted tag data (rfid_data.json, written by the RFID substrate) restores
-identified lanes across a restart, then every channel re-reads its tag. A tagged lane resolves
-as usual. An untagged lane with a hand-picked spool re-applies that pick (the firmware re-read
-can wipe color and material). An untagged lane with no pick is left alone: the helper does not
-write NONE over a screen-set color. The print-start sync refreshes the tool map (auto mode) or
-re-resolves every manual macro pick (manual mode). The data-file path is injected: where the
-file lives on a given machine is deployment knowledge, not this module's.
+identified lanes across a restart, then every channel re-reads its tag. The re-read is
+asynchronous: this module snapshots each lane's current pick (tool macro first, AFC lane
+otherwise) and waits for the fresh RFID callback. A tagged report replaces the snapshot. A
+report with no tag restores that pick so a panel or screen choice is not wiped. A lane with
+no pick is left alone: the helper does not write NONE over a screen-set color. The print-start
+sync refreshes the tool map (auto mode) or re-resolves every manual macro pick (manual mode).
+The data-file path is injected: where the file lives on a given machine is deployment
+knowledge, not this module's.
 """
 import json
 
+from .active_spool import coerce_spool_id
+from .afc import lane_spool_id
 from .filament_info import is_untagged_filament
 from .u1_tools import MAX_TOOLS_COUNT
 
@@ -23,8 +27,8 @@ class SpoolDetection:
         self.spoolman = helper.spoolman
         self.u1_tools = helper.u1_tools
         self.holders = helper.holders
-        self.resolution = helper.resolution
         self.rfid_data_path = rfid_data_path
+        self.pending_picks = {}
 
     def detect_spools(self):
         detected_spools = self.u1_tools.get_spools_config()
@@ -34,10 +38,21 @@ class SpoolDetection:
         for channel_key, info in self._load_rfid_data().items():
             self._restore_tagged_lane(int(channel_key), info)
 
+        self.pending_picks = {}
         for extruder in range(len(detected_spools)):
+            self.pending_picks[extruder] = self.pick_on_channel(extruder)
             self.macros.detect_spool(extruder)
-            # Tagged: resolve. Untagged with a pick: re-apply. Untagged with none: leave it.
-            self.resolution.apply_spool_for_extruder(extruder)
+
+    def pick_on_channel(self, channel):
+        return (
+            coerce_spool_id(self.macros.get_spool_id_for_tool(channel))
+            or coerce_spool_id(lane_spool_id(self.helper.printer, channel))
+        )
+
+    def take_pending_pick(self, channel):
+        if channel not in self.pending_picks:
+            return None, False
+        return self.pending_picks.pop(channel), True
 
     def _load_rfid_data(self):
         try:

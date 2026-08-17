@@ -127,6 +127,7 @@ def build_resolution(mode="auto", extruder_by_tool=None, **spoolman_traits):
     logs = RecordingLogs()
     macros = RecordingMacros()
     afc_pushes = []
+    remembered = []
     helper = types.SimpleNamespace(
         logs=logs,
         macros=macros,
@@ -136,11 +137,16 @@ def build_resolution(mode="auto", extruder_by_tool=None, **spoolman_traits):
         tracking=RecordingTracking(),
         mode=mode,
         logging="info",
+        printer=types.SimpleNamespace(lookup_object=lambda name, default=None: default),
         push_spool_to_afc=lambda channel, spool_id: afc_pushes.append((channel, spool_id)),
+        remember_manual_spool=lambda tool_index, spool_id: remembered.append(
+            (tool_index, spool_id)
+        ),
     )
     helper.holders = SpoolHolders(
         logs, macros, helper.push_spool_to_afc, lambda channel: True
     )
+    helper.remembered = remembered
     resolution = SpoolResolution(helper)
     return resolution, helper, afc_pushes
 
@@ -344,7 +350,8 @@ def test_untagged_lane_with_a_manual_pick_reapplies_that_spool():
     resolution.apply_spool_for_extruder(1)
     assert helper.spoolman.resolved_infos == []
     assert helper.macros.tool_spool_sets == []
-    assert afc_pushes == []
+    assert afc_pushes == [(1, 55)]
+    assert helper.remembered == [(1, 55)]
     assert helper.writer.blanked_lanes == []
     assert helper.writer.applied_spools == [(1, SPOOLMAN_SPOOL)]
     assert helper.spoolman.fetched_spool_ids == [55]
@@ -356,7 +363,8 @@ def test_empty_holder_with_a_manual_pick_reapplies_that_spool():
     resolution.apply_spool_for_extruder(2)
     assert helper.spoolman.resolved_infos == []
     assert helper.macros.tool_spool_sets == []
-    assert afc_pushes == []
+    assert afc_pushes == [(2, 55)]
+    assert helper.remembered == [(2, 55)]
     assert helper.writer.applied_spools == [(2, SPOOLMAN_SPOOL)]
     assert helper.writer.blanked_lanes == []
 
@@ -368,8 +376,23 @@ def test_untagged_lane_without_a_pick_does_not_wipe_firmware_config():
     assert helper.spoolman.resolved_infos == []
     assert helper.macros.tool_spool_sets == []
     assert afc_pushes == []
+    assert helper.remembered == []
     assert helper.writer.blanked_lanes == []
     assert helper.writer.applied_spools == []
+
+
+def test_afc_lane_pick_without_a_macro_is_reapplied():
+    resolution, helper, afc_pushes = build_resolution()
+    lane = types.SimpleNamespace(spool_id=94)
+    helper.printer.lookup_object = (
+        lambda name, default=None, lane=lane: lane if name == "AFC_lane E3" else default
+    )
+    resolution.apply_spool_for_extruder(3)
+    assert helper.spoolman.resolved_infos == []
+    assert helper.macros.tool_spool_sets == [("T3", 94)]
+    assert afc_pushes == [(3, 94)]
+    assert helper.remembered == [(3, 94)]
+    assert helper.writer.applied_spools == [(3, SPOOLMAN_SPOOL)]
 
 
 def test_a_lane_that_matches_no_spool_gives_its_panel_name_back():
