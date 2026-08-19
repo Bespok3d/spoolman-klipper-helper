@@ -86,6 +86,7 @@ def build_detection(tmp_path, spools_config, rfid_data=None, mode="auto", extrud
     )
     helper.holders = SpoolHolders(logs, macros, helper.push_spool_to_afc, lambda channel: True)
     helper.resolution = RecordingResolution()
+    helper.printer = types.SimpleNamespace(lookup_object=lambda *args, **kwargs: None)
     detection = SpoolDetection(helper, str(rfid_data_path))
     return detection, helper, afc_pushes
 
@@ -98,7 +99,8 @@ def test_detect_merges_firmware_fields_and_rereads_every_channel(tmp_path):
     detection.detect_spools()
     assert helper.holders.spool_holders[0] == {"VENDOR": "Acme", "SKU": "abc"}
     assert helper.macros.detected_channels == [0, 1]
-    assert helper.resolution.applied_extruders == [0, 1]
+    assert helper.resolution.applied_extruders == []
+    assert detection.pending_picks == {0: None, 1: None}
 
 
 def test_detect_restores_tagged_lanes_from_rfid_data(tmp_path):
@@ -116,7 +118,35 @@ def test_detect_restores_tagged_lanes_from_rfid_data(tmp_path):
 def test_detect_without_a_rfid_file_still_runs(tmp_path):
     detection, helper, _afc_pushes = build_detection(tmp_path, spools_config=[{}])
     detection.detect_spools()
-    assert helper.resolution.applied_extruders == [0]
+    assert helper.resolution.applied_extruders == []
+    assert helper.macros.detected_channels == [0]
+
+
+def test_detect_sends_every_lane_through_resolution_including_untagged_picks(tmp_path):
+    # Tagged, untagged-with-pick, and untagged-without-pick all wait for the RFID callback.
+    detection, helper, _afc_pushes = build_detection(
+        tmp_path, spools_config=[{}, {}, {}, {}]
+    )
+    helper.holders.spool_holders[0] = dict(TAGGED)
+    helper.holders.spool_holders[1] = {"VENDOR": "NONE", "MAIN_TYPE": "", "SPOOL_ID": None}
+    helper.macros.spool_id_by_tool[1] = 55
+    detection.detect_spools()
+    assert helper.macros.detected_channels == [0, 1, 2, 3]
+    assert helper.resolution.applied_extruders == []
+    assert detection.pending_picks == {0: None, 1: 55, 2: None, 3: None}
+
+
+def test_detect_snapshots_an_afc_lane_pick_when_the_macro_is_empty(tmp_path):
+    detection, helper, _afc_pushes = build_detection(
+        tmp_path, spools_config=[{}, {}]
+    )
+    lane = types.SimpleNamespace(spool_id=94)
+    helper.printer.lookup_object = (
+        lambda name, default=None, lane=lane: lane if name == "AFC_lane E0" else default
+    )
+    detection.detect_spools()
+    assert detection.pending_picks[0] == 94
+    assert helper.resolution.applied_extruders == []
 
 
 def test_sync_in_auto_mode_is_a_noop_because_the_map_is_live(tmp_path):
