@@ -372,3 +372,12 @@ def test_detect_spools_lets_a_fresh_tag_replace_an_afc_pick(tmp_path):
         printer, lambda: finish_detect(helper, printer, {0: (dict(TAGGED), False)})
     )
     assert "SET_GCODE_VARIABLE MACRO=T0 VARIABLE=spool_id VALUE=104" in new_scripts
+
+
+def test_the_spoolman_connected_endpoint_is_registered_and_acks(tmp_path):
+    helper, printer = boot_helper(tmp_path)
+    handler = printer.objects["webhooks"].endpoints["spoolman_helper/spoolman_connected"]
+    assert handler == helper.resolution.on_spoolman_connected
+    acks = []
+    handler(types.SimpleNamespace(send=acks.append))
+    assert acks == [{"ok": True}]

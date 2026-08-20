@@ -176,9 +176,9 @@ Each line is: **what you have** then how the name behaves, then how color/materi
   the firmware re-read blanked them.
 - **Untagged, loaded but not picked:** shown as `UNKNOWN` (present but unidentified) rather than
   empty, in the helper's logs and `DUMP_SPOOLS`.
-- **Untagged, picked mid-print:** name and the active spool update live; only the firmware
-  color/material write is deferred to when the print leaves printing/paused (the firmware can
-  reject it mid-print).
+- **Picked or identified mid-print:** name and the active spool update live; only the firmware
+  color/material write is deferred to when the print leaves printing/paused. This holds however the
+  spool was identified, by hand or by tag.
 - **Spool cleared for a tool:** name clears, and the lane's color/material are reset to empty on the
   screen and AFC. `CLEAR_ALL_SPOOLS` clears every lane, including RFID-tagged ones.
 - **Untagged filament pulled out:** a manually picked spool whose filament you physically remove is
@@ -196,9 +196,12 @@ Each line is: **what you have** then how the name behaves, then how color/materi
   Spoolman.
 - It acts only on the 4 physical lanes (the tools that map to physical extruders 0 to 3 in the
   U1's virtual-tool table). A virtual tool with no physical mapping is skipped.
-- A spool picked while a print is running or paused is **deferred**: the name updates live, and
-  the color/material land the moment the print leaves printing/paused. This is by design, since
-  the firmware can reject the untagged write mid-print.
+- Any spool change while a print is running or paused is **deferred**: the name updates live, and
+  the color/material land the moment the print leaves printing/paused. This is by design: the
+  printer resets its pressure advance every time it accepts that write, so a write landing
+  mid-print would change how the running print extrudes (and the firmware can reject it outright).
+  Only the last change per lane is sent when the print ends, and it is dropped if the printer
+  already carries it.
 - After installing or updating, Moonraker restarts and the AFC frontends' service worker may
   serve stale JavaScript. If a panel looks wrong, hard-refresh the browser.
 
@@ -371,6 +374,28 @@ keeps the spool you picked by hand, on the printer or in the AFC panel, and a la
 keeps the color and material already on the screen. It is the retry, not the cure: if Spoolman
 genuinely has no filament matching that tag, `DETECT_SPOOLS` fails exactly the same way, and the
 two fixes above are what stop it for good.
+
+## Verifying on a real printer
+
+`spoolman/tests_invitro/` is a pytest suite that runs against a live printer and checks the plugin
+end to end: the AFC card names, the firmware filament fields the slicer reads, manual picks, the
+`spoolman_overrides_tag` switch, and `SH_DETECT_SPOOLS`. It never runs in the repo gate; you point
+it at a printer explicitly:
+
+```sh
+B3D_HIL_HOST=<printer-address> bash scripts/invitro.sh
+```
+
+That runs the read-only tier: it observes the printer and changes nothing. Adding
+`B3D_INVITRO_MUTATE=1` also runs the mutating tier, which picks spools, flips the priority option
+(editing the installed config over SSH and restarting Klipper), and re-reads tags. Every mutating
+test restores what it changed, but only run it on a printer that is idle and yours to disturb; the
+suite refuses to mutate a printer that is printing.
+
+The SSH steps use the firmware's stock root login by default; set `B3D_HIL_SSH_USER` and
+`B3D_HIL_SSH_PASS` if the printer's credentials differ. The expectations are computed by the
+plugin's own composer over the live Spoolman records, so a red test means the printer disagrees
+with what the shipped code promises, not with a hardcoded fixture.
 
 ## Troubleshooting
 

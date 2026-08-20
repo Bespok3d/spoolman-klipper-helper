@@ -22,8 +22,7 @@ def push_spool_to_afc(printer: Any, channel: int, spool_id: Any, extruders_count
 
 
 def lane_spool_id(printer: Any, channel: int) -> Any:
-    lane = _lane(printer, channel)
-    return getattr(lane, "spool_id", None) if lane is not None else None
+    return getattr(_lane(printer, channel), "spool_id", None)
 
 
 # The filament description ("<brand> <material> <sub-type>") the helper pushed onto the lane via

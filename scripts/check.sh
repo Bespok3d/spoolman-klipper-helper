@@ -34,7 +34,7 @@ echo "spoolman-klipper-helper gate"
 b3d_python_tools
 
 run_check "pytest"  pytest_in_dir "$PLUGIN_DIR" tests
-run_check "ruff"    ruff_in_dir "$PLUGIN_DIR" files tests
+run_check "ruff"    ruff_in_dir "$PLUGIN_DIR" files tests tests_invitro
 # The moonraker proxy imports moonraker itself, so it is ruff-only; the pure modules carry the type
 # coverage.
 run_check "mypy"    mypy_in_dir "$PLUGIN_DIR" "$SPOOL_EXTRAS/logs.py" "$SPOOL_EXTRAS/u1_tools.py"

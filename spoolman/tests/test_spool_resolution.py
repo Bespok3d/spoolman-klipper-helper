@@ -2,6 +2,7 @@
 """Resolving holders to Spoolman ids, the tool->spool queries, and the UID-bind entry."""
 import json
 import types
+from pathlib import Path
 
 from klipper_fakes import (
     FakePrinter,
@@ -13,7 +14,7 @@ from klipper_fakes import (
 from spoolman import card_uids
 from spoolman.print_task_writer import slicer_filament_description
 from spoolman.spool_holders import SpoolHolders
-from spoolman.spool_resolution import SpoolResolution
+from spoolman.spool_resolution import SPOOLMAN_CONNECTED_ENDPOINT, SpoolResolution
 from spoolman.spoolman import Spoolman
 from spoolman.unmatched_tag import REGISTER_REFUSED
 
@@ -724,3 +725,31 @@ def test_a_spool_id_on_the_tag_still_wins_over_both():
     resolved, requested = resolve_through_real_chain({**STOCK_SNAPMAKER_TAG, "SPOOL_ID": 104})
     assert resolved == [104]
     assert requested == []
+
+
+def test_a_lane_parked_on_a_dead_spoolman_re_resolves_when_the_connection_comes_up():
+    resolution, helper, _afc_pushes = build_resolution(
+        resolve_result=None, spoolman_unanswered=True)
+    helper.holders.spool_holders[2] = {**TAGGED, "SPOOL_ID": None}
+    resolution.apply_spool_for_extruder(2)
+    assert resolution.channels_awaiting_spoolman == {2}
+    helper.spoolman.resolve_result = SPOOLMAN_SPOOL
+    helper.spoolman.spoolman_unanswered = False
+    resolution.retry_lanes_awaiting_spoolman()
+    assert helper.macros.tool_spool_sets[-1] == ("T2", 104)
+    assert resolution.channels_awaiting_spoolman == set()
+
+
+def test_a_tag_that_matched_nothing_with_spoolman_answering_is_not_parked():
+    resolution, helper, _afc_pushes = build_resolution(
+        resolve_result=None, registration=REFUSES_TO_REGISTER)
+    helper.holders.spool_holders[1] = {**TAGGED, "SPOOL_ID": None}
+    resolution.apply_spool_for_extruder(1)
+    assert resolution.channels_awaiting_spoolman == set()
+
+
+def test_the_connected_endpoint_is_the_one_the_moonraker_proxy_pushes():
+    proxy_source = (
+        Path(__file__).resolve().parents[1] / "files" / "moonraker" / "spoolman_proxy.py"
+    ).read_text()
+    assert SPOOLMAN_CONNECTED_ENDPOINT in proxy_source

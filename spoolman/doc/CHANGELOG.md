@@ -2,6 +2,13 @@
 
 ## 0.1.36
 
+- Fix: lanes read at power-on while Spoolman was still unreachable used to stay unassigned until
+  the next tag event. They now bind on their own the moment the Spoolman connection comes up.
+- Fix: identifying a spool while a print is running no longer touches the running print. Before,
+  a tag read or a pick mid-print sent the brand, material and color straight to the printer, and
+  the printer resets its pressure advance every time it accepts that, so extrusion could change
+  part way through a job. The lane card still shows the new spool immediately; the details the
+  touchscreen and the slicer read are sent when the print ends.
 - Fix: a tagged spool resolved in Spoolman now files the same brand, material and sub-type the
   slicer reads, not only the AFC lane name. Before, Fluidd could show `Polymaker PLA Silk` while
   Snapmaker Orca still saw `Basic`, because a tagged lane never wrote `print_task_config`. With

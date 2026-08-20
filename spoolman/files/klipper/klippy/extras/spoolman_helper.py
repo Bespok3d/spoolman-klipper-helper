@@ -20,7 +20,7 @@ from .spoolman.print_lifecycle import PrintLifecycle
 from .spoolman.print_task_writer import PrintTaskWriter
 from .spoolman.spool_detection import SpoolDetection
 from .spoolman.spool_holders import SpoolHolders
-from .spoolman.spool_resolution import SpoolResolution
+from .spoolman.spool_resolution import SPOOLMAN_CONNECTED_ENDPOINT, SpoolResolution
 from .spoolman.spoolman import Spoolman
 from .spoolman.tracking import SpoolTracking
 from .spoolman.u1_tools import EXTRUDERS_COUNT, U1Tools
@@ -58,6 +58,9 @@ class SpoolmanHelper:
             self.logs, self.macros, self.push_spool_to_afc, self._lane_has_filament
         )
         self.resolution = SpoolResolution(self)
+        self.printer.lookup_object("webhooks").register_endpoint(
+            SPOOLMAN_CONNECTED_ENDPOINT, self.resolution.on_spoolman_connected
+        )
         self.detection = SpoolDetection(self, RFID_DATA_FILE)
         self.manual_restore = ManualSpoolRestore(self, MANUAL_SPOOLS_FILE)
         self.report = LaneReport(self)

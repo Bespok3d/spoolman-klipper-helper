@@ -68,8 +68,8 @@ class SpoolHolders:
         if spool_id and spool_id in self.spools_by_id:
             del self.spools_by_id[spool_id]
 
+    # Drops the tag report only: the tool pick and the firmware color stay as they are.
     def forget_tag(self, channel):
-        """Drop the tag report; leave the tool pick and firmware color as they are."""
         if 0 <= channel < EXTRUDERS_COUNT:
             self.spool_holders[channel] = None
 

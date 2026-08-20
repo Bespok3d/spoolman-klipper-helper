@@ -109,12 +109,15 @@ class SpoolTracking:
                 self.logs.log(f"Filament pulled from extruder {extruder}, releasing T{tool_index}")
                 self.helper.macros.set_spool_id_for_tool(f"T{tool_index}", None)
 
-    # Only drains the deferred firmware writes: the print-end ACTIVE-SPOOL clear belongs to
-    # print_lifecycle (via clear_active below), and a tool still mounted after a finished print
-    # must NOT be re-applied here (a finished print consumes nothing).
+    # Only drains what was held back while the print ran: the writer's filament config writes
+    # first, then the deferred screen writes, so a spool picked by hand during the print has the
+    # last word. The print-end ACTIVE-SPOOL clear belongs to print_lifecycle (via clear_active
+    # below), and a tool still mounted after a finished print must NOT be re-applied here (a
+    # finished print consumes nothing).
     def on_print_left_active(self, lane, afc_present):
         self.lane = lane
         self.print_state = ""
+        self.writer.release_writes_held_during_print()
         pending = self.pending_by_tool
         self.pending_by_tool = {}
         for tool_index, spool_id in pending.items():

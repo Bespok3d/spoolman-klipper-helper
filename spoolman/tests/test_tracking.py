@@ -1,7 +1,7 @@
 # ruff: noqa: PLR2004  Tests assert against literal spool ids and extruder indexes.
 """The tracking coordinator: the three active-spool rules end to end, deferral, release,
 location, and the console voice going through the helper's own Logs (never fabricated)."""
-from print_task_writer import PrintTaskWriter
+from spoolman.print_task_writer import PrintTaskWriter
 from spoolman.tracking import SpoolTracking
 
 SPOOL = {
@@ -85,13 +85,20 @@ class FakeReactor:
         return self.now
 
 
+class FakePrintStats:
+    def __init__(self, state):
+        self.state = state
+
+
 class FakePrinter:
-    def __init__(self, task_config):
+    def __init__(self, task_config, print_state=""):
         self.task = FakePrintTaskConfig(task_config)
+        self.print_stats = FakePrintStats(print_state)
         self.reactor = FakeReactor()
 
     def lookup_object(self, name, default=None):
-        return self.task if name == "print_task_config" else default
+        objects = {"print_task_config": self.task, "print_stats": self.print_stats}
+        return objects.get(name, default)
 
     def get_reactor(self):
         return self.reactor
@@ -108,8 +115,8 @@ def task_config(extruder_map=None):
     }
 
 
-def build_tracking(extruder_map=None, track_location=False, location=""):
-    printer = FakePrinter(task_config(extruder_map))
+def build_tracking(extruder_map=None, track_location=False, location="", print_state=""):
+    printer = FakePrinter(task_config(extruder_map), print_state)
     logs = RecordingLogs()
     macros = RecordingMacros()
     spoolman = RecordingSpoolman()
@@ -184,6 +191,19 @@ def test_print_end_drains_writes_and_clear_active_resets_ground_truth():
     assert spoolman.active_spool_calls[-1] is None
     tracking.track_tool_spool(104)             # next print starts with the same tool
     assert spoolman.active_spool_calls[-1] == 104  # NOT equal-skipped
+
+
+def test_print_end_sends_the_filament_config_the_writer_held_during_the_print():
+    # A tag read or a manual pick resolved mid print never reaches tracking's own deferral: the
+    # writer is what holds that firmware write back, and print end is what lets it go. The
+    # firmware resets the live extruder's pressure advance on every write it takes.
+    tracking, _spoolman, macros, _logs = build_tracking(print_state="printing")
+    tracking.writer.apply_spool(2, SPOOL)
+    assert all(not cmd.startswith("SET_PRINT_FILAMENT_CONFIG") for cmd in macros.commands)
+    tracking.printer.print_stats.state = "complete"
+    tracking.on_print_left_active("E2", True)
+    assert any(cmd.startswith("SET_PRINT_FILAMENT_CONFIG CONFIG_EXTRUDER=2")
+               for cmd in macros.commands)
 
 
 def test_a_mounted_tool_is_not_reapplied_when_the_print_ends():

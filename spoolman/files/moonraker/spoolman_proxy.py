@@ -24,7 +24,19 @@ class SpoolmanProxy:
         self.spoolman_url = f"{scheme}://{host}"
 
         self.server.register_remote_method("spoolman_proxy", self.rpc_spoolman_proxy)
+        self.server.register_event_handler(
+            "spoolman:spoolman_status_changed", self._relay_spoolman_up_to_klippy
+        )
         logging.info(f"SpoolmanProxy loaded, server: {self.spoolman_url}")
+
+    # The stock [spoolman] component announces its connection state; the helper re-runs the
+    # lane lookups that died while Spoolman was unreachable, so it hears about "up" at once.
+    async def _relay_spoolman_up_to_klippy(self, status: dict) -> None:
+        if not status.get("spoolman_connected"):
+            return
+        await self.klippy_apis._send_klippy_request(
+            "spoolman_helper/spoolman_connected", {}, default=None
+        )
 
     async def rpc_spoolman_proxy(
         self,

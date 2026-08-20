@@ -19,6 +19,8 @@ filament preset, shipped or user-made, carries exactly that glued name.
 import base64
 import re
 
+from .carrier_watch import ACTIVE_PRINT_STATES, print_state
+
 RGB_HEX_LENGTH = 6
 RGBA_HEX_LENGTH = 8
 OPAQUE_ALPHA = "FF"
@@ -280,6 +282,7 @@ class PrintTaskWriter:
         self.macros = macros
         self.spoolman_overrides_tag = spoolman_overrides_tag
         self.subtype_sources = subtype_sources
+        self.writes_held_during_print = {}
 
     def _firmware_write_args(self, desired):
         if not self.spoolman_overrides_tag:
@@ -299,13 +302,44 @@ class PrintTaskWriter:
             return True
         return not channel_is_official(config.get("filament_official"), physical_extruder)
 
+    # The firmware runs FLOW_RESET_K on every filament config write it accepts, which resets
+    # the live extruder's pressure advance. A write that lands while the printer is printing
+    # therefore changes how the running print extrudes, so it waits: the last write per extruder
+    # is held and sent once the print is over. The lane name is never held, because the AFC panel
+    # label touches nothing the print is doing.
+    def _send_or_hold_filament_config(self, physical_extruder, desired_args, failure_problem):
+        if print_state(self.printer) in ACTIVE_PRINT_STATES:
+            self.writes_held_during_print[physical_extruder] = (desired_args, failure_problem)
+            self.logs.verbose(
+                f"Holding filament config for extruder {physical_extruder} until the print ends"
+            )
+            return
+        self.macros.run(
+            set_print_filament_config_gcode(self._firmware_write_args(desired_args)),
+            failure_problem,
+        )
+
+    # Called when the print leaves printing/paused, by the same coordinator that drains its own
+    # held writes there. Each one is re-judged against the live config first: the firmware may
+    # already carry what was held, and the lane may have become official meanwhile.
+    def release_writes_held_during_print(self):
+        held = self.writes_held_during_print
+        self.writes_held_during_print = {}
+        for physical_extruder, held_write in held.items():
+            self._release_held_write(physical_extruder, *held_write)
+
+    def _release_held_write(self, physical_extruder, desired_args, failure_problem):
+        if not self._should_write(physical_extruder, desired_args):
+            return
+        self._send_or_hold_filament_config(physical_extruder, desired_args, failure_problem)
+
     def apply_spool(self, physical_extruder, spool):
         desired = filament_config_args_from_spool(spool, physical_extruder, self.subtype_sources)
         if not has_filament_fields(desired):
             return
         if self._should_write(physical_extruder, desired):
-            self.macros.run(
-                set_print_filament_config_gcode(self._firmware_write_args(desired)),
+            self._send_or_hold_filament_config(
+                physical_extruder, desired,
                 f"could not write filament config for extruder {physical_extruder}",
             )
         return self.label_lane(physical_extruder, spool)
@@ -314,8 +348,8 @@ class PrintTaskWriter:
         desired = filament_config_clear_args(physical_extruder)
         if not self._should_write(physical_extruder, desired):
             return
-        self.macros.run(
-            set_print_filament_config_gcode(self._firmware_write_args(desired)),
+        self._send_or_hold_filament_config(
+            physical_extruder, desired,
             f"could not clear filament config for extruder {physical_extruder}",
         )
         self.clear_lane_label(physical_extruder)

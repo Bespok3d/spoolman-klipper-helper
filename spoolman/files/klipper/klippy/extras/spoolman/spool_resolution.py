@@ -22,6 +22,8 @@ from .unmatched_tag import (
     unmatched_tag_message,
 )
 
+SPOOLMAN_CONNECTED_ENDPOINT = "spoolman_helper/spoolman_connected"
+
 
 class SpoolResolution:
     def __init__(self, helper):
@@ -32,9 +34,11 @@ class SpoolResolution:
         self.u1_tools = helper.u1_tools
         self.writer = helper.writer
         self.holders = helper.holders
+        self.channels_awaiting_spoolman = set()
 
     def apply_spool_for_extruder(self, extruder):
         self.logs.verbose(f"Trying to bind spool to extruder {extruder}")
+        self.channels_awaiting_spoolman.discard(extruder)
         spool = self.holders.spool_holders[extruder]
         if not spool or is_untagged_filament(spool):
             self._reapply_manual_pick(extruder)
@@ -54,15 +58,35 @@ class SpoolResolution:
                 spool_id = spool.get("SPOOL_ID")
 
             if not spool_id:
-                # A tagged lane that matched nothing must stop advertising the old spool.
-                # An untagged lane never reaches here: it re-applies a hand pick or stays put.
-                self._unbind_lane_spool(extruder)
-                self._report_unresolved_tag(extruder, spool, spoolman_unanswered)
+                self._retract_unresolved_lane(extruder, spool, spoolman_unanswered)
                 return
 
             self._bind_resolved_spool(extruder, spool, spool_id)
 
         self.spoolman.resolve_spool(spool, on_resolve_spool)
+
+    # A tagged lane that matched nothing must stop advertising the old spool. An untagged lane
+    # never reaches here: it re-applies a hand pick or stays put. A lookup that died because
+    # Spoolman never answered is not a tag that matched nothing, so that lane is parked for the
+    # replay that runs when Moonraker reports the Spoolman connection is up.
+    def _retract_unresolved_lane(self, extruder, spool, spoolman_unanswered):
+        self._unbind_lane_spool(extruder)
+        self._report_unresolved_tag(extruder, spool, spoolman_unanswered)
+        if spoolman_unanswered:
+            self.channels_awaiting_spoolman.add(extruder)
+
+    # Moonraker's proxy pushes this the moment its Spoolman connection comes up, so lanes whose
+    # boot-time lookups died while the network was still down bind without waiting for the next
+    # tag event.
+    def on_spoolman_connected(self, web_request):
+        web_request.send({"ok": True})
+        self.retry_lanes_awaiting_spoolman()
+
+    def retry_lanes_awaiting_spoolman(self):
+        channels_to_retry = sorted(self.channels_awaiting_spoolman)
+        self.channels_awaiting_spoolman.clear()
+        for channel in channels_to_retry:
+            self.apply_spool_for_extruder(channel)
 
     def current_manual_pick(self, extruder):
         return (
