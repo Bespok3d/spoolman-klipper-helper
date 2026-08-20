@@ -8,6 +8,8 @@ the helper's runtime mode. The by-hand entries live here too: SH_BIND_CARD_UID b
 currently sitting on a channel to a chosen spool, and SH_ADD_SPOOL_FROM_TAG turns that tag into
 a spool of its own.
 """
+from .active_spool import coerce_spool_id
+from .afc import lane_spool_id
 from .card_uids import trackable_uid
 from .filament_info import filament_info_to_string, is_untagged_filament
 from .u1_tools import EXTRUDERS_COUNT
@@ -20,6 +22,8 @@ from .unmatched_tag import (
     unmatched_tag_message,
 )
 
+SPOOLMAN_CONNECTED_ENDPOINT = "spoolman_helper/spoolman_connected"
+
 
 class SpoolResolution:
     def __init__(self, helper):
@@ -30,12 +34,14 @@ class SpoolResolution:
         self.u1_tools = helper.u1_tools
         self.writer = helper.writer
         self.holders = helper.holders
+        self.channels_awaiting_spoolman = set()
 
     def apply_spool_for_extruder(self, extruder):
         self.logs.verbose(f"Trying to bind spool to extruder {extruder}")
+        self.channels_awaiting_spoolman.discard(extruder)
         spool = self.holders.spool_holders[extruder]
-        if not spool:
-            self.logs.verbose(f"No filament info for extruder {extruder}. Normal if no RFID tag.")
+        if not spool or is_untagged_filament(spool):
+            self._reapply_manual_pick(extruder)
             return
 
         self.logs.verbose(
@@ -52,15 +58,62 @@ class SpoolResolution:
                 spool_id = spool.get("SPOOL_ID")
 
             if not spool_id:
-                # The lane stops advertising the old spool first, because reporting the tag can
-                # end in a spool being created for it, and that one must be the last word.
-                self._unbind_lane_spool(extruder)
-                self._report_unresolved_tag(extruder, spool, spoolman_unanswered)
+                self._retract_unresolved_lane(extruder, spool, spoolman_unanswered)
                 return
 
             self._bind_resolved_spool(extruder, spool, spool_id)
 
         self.spoolman.resolve_spool(spool, on_resolve_spool)
+
+    # A tagged lane that matched nothing must stop advertising the old spool. An untagged lane
+    # never reaches here: it re-applies a hand pick or stays put. A lookup that died because
+    # Spoolman never answered is not a tag that matched nothing, so that lane is parked for the
+    # replay that runs when Moonraker reports the Spoolman connection is up.
+    def _retract_unresolved_lane(self, extruder, spool, spoolman_unanswered):
+        self._unbind_lane_spool(extruder)
+        self._report_unresolved_tag(extruder, spool, spoolman_unanswered)
+        if spoolman_unanswered:
+            self.channels_awaiting_spoolman.add(extruder)
+
+    # Moonraker's proxy pushes this the moment its Spoolman connection comes up, so lanes whose
+    # boot-time lookups died while the network was still down bind without waiting for the next
+    # tag event.
+    def on_spoolman_connected(self, web_request):
+        web_request.send({"ok": True})
+        self.retry_lanes_awaiting_spoolman()
+
+    def retry_lanes_awaiting_spoolman(self):
+        channels_to_retry = sorted(self.channels_awaiting_spoolman)
+        self.channels_awaiting_spoolman.clear()
+        for channel in channels_to_retry:
+            self.apply_spool_for_extruder(channel)
+
+    def current_manual_pick(self, extruder):
+        return (
+            coerce_spool_id(self.macros.get_spool_id_for_tool(extruder))
+            or coerce_spool_id(lane_spool_id(self.helper.printer, extruder))
+        )
+
+    # FILAMENT_DT_UPDATE can blank print_task_config on a lane with no tag. A hand-picked
+    # spool_id still sitting on the tool macro or the AFC lane is re-applied so color and
+    # material come back. No pick means the screen-set config stays: the helper does not
+    # write NONE over it.
+    def _reapply_manual_pick(self, extruder):
+        self.reapply_preserved_pick(extruder, self.current_manual_pick(extruder))
+
+    def reapply_preserved_pick(self, extruder, spool_id):
+        spool_id = coerce_spool_id(spool_id)
+        if not spool_id:
+            self.logs.verbose(f"No filament info for extruder {extruder}. Normal if no RFID tag.")
+            return
+        self.logs.verbose(
+            f"Re-applying hand-picked spool {spool_id} on extruder {extruder}"
+        )
+        if coerce_spool_id(self.macros.get_spool_id_for_tool(extruder)) != spool_id:
+            self.macros.set_spool_id_for_tool(f"T{extruder}", spool_id)
+        self.helper.push_spool_to_afc(extruder, spool_id)
+        self.helper.remember_manual_spool(extruder, spool_id)
+        self._apply_spoolman_to_the_lane(extruder, spool_id)
 
     # A lane with nothing on it has no tag to report and nothing to search for, so it says
     # nothing. A Spoolman that never answered is not a tag that matched nothing: it gets its own
@@ -111,7 +164,7 @@ class SpoolResolution:
         )
         self.macros.set_spool_id_for_tool(tool, spool_id)
         self.helper.push_spool_to_afc(extruder, spool_id)
-        self._label_lane_from_spoolman(extruder, spool_id, new_spool)
+        self._apply_spoolman_to_the_lane(extruder, spool_id, new_spool)
 
     # The exact inverse of a bind, for a lane whose filament matched no spool: it must stop
     # advertising the one that was there before, in all three places a bind writes to. The holder
@@ -121,19 +174,21 @@ class SpoolResolution:
         self.helper.push_spool_to_afc(extruder, None)
         self.writer.clear_lane_label(extruder)
 
-    # The AFC panel only displays a lane name the helper pushed; an RFID-resolved lane deserves
-    # one as much as a manual pick does (the tag's own vendor/type is not the Spoolman name).
-    # A spool the helper just created comes back whole, so the lane is named in the same breath
-    # as the add. Asking Spoolman for it again left the lane unnamed until that answer arrived,
-    # and an unnamed lane card shows the one word Spoolman files a new filament under, its
-    # sub-type. A lane resolved any other way still has to ask.
-    def _label_lane_from_spoolman(self, extruder, spool_id, new_spool=None):
-        if new_spool and self.writer.label_lane(extruder, new_spool):
+    # A resolved tag is mirrored the same way a manual pick is: apply_spool writes the Spoolman
+    # record into print_task_config (what Snapmaker Orca reads) and names the AFC lane. Naming
+    # the lane alone left Orca on whatever the firmware had filed, so a tagged Silk spool could
+    # show correctly in Fluidd and still reach the slicer as Basic. apply_spool itself still
+    # refuses an official channel unless spoolman_overrides_tag is on. A spool the helper just
+    # created comes back whole, so it is applied in the same breath as the add; asking Spoolman
+    # for it again left the lane unnamed until that answer arrived. A lane resolved any other
+    # way still has to ask.
+    def _apply_spoolman_to_the_lane(self, extruder, spool_id, new_spool=None):
+        if new_spool and self.writer.apply_spool(extruder, new_spool):
             return
 
         def on_spool(spoolman_spool, target_extruder=extruder):
             if spoolman_spool:
-                self.writer.label_lane(target_extruder, spoolman_spool)
+                self.writer.apply_spool(target_extruder, spoolman_spool)
 
         self.spoolman.fetch_spool(spool_id, on_spool)
 

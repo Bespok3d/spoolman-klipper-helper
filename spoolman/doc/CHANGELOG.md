@@ -1,5 +1,29 @@
 # Changelog
 
+## 0.1.36
+
+- Fix: lanes read at power-on while Spoolman was still unreachable used to stay unassigned until
+  the next tag event. They now bind on their own the moment the Spoolman connection comes up.
+- Fix: identifying a spool while a print is running no longer touches the running print. Before,
+  a tag read or a pick mid-print sent the brand, material and color straight to the printer, and
+  the printer resets its pressure advance every time it accepts that, so extrusion could change
+  part way through a job. The lane card still shows the new spool immediately; the details the
+  touchscreen and the slicer read are sent when the print ends.
+- Fix: a tagged spool resolved in Spoolman now files the same brand, material and sub-type the
+  slicer reads, not only the AFC lane name. Before, Fluidd could show `Polymaker PLA Silk` while
+  Snapmaker Orca still saw `Basic`, because a tagged lane never wrote `print_task_config`. With
+  **Spoolman pick overrides a tagged lane** on, the Spoolman record (including the `variant` field)
+  is written into the firmware config the slicer reads, and that write sends `FORCE=1`, the same
+  flag `CLEAR_ALL_SPOOLS` already uses. Without it the firmware rejects an official RFID lane with
+  `official filament, not configurable`. Off, the tag still wins on that config and only the lane
+  name is pushed.
+- Fix: `DETECT_SPOOLS` no longer wipes a hand-picked spool on a lane with no RFID tag. A tagged
+  lane still resolves and replaces whatever was there. An untagged lane that already has a pick,
+  chosen on the printer or in the AFC panel, is re-applied, so a firmware re-read cannot blank
+  color and material. An untagged lane with no pick is left as it is: the helper does not write
+  `NONE` over a screen-set color. Pulling the filament out still releases the pick;
+  `CLEAR_ALL_SPOOLS` still clears every lane.
+
 ## 0.1.35
 
 - All of this is driven by the new buttons in the AFC panel of Fluidd and Mainsail, three at the top

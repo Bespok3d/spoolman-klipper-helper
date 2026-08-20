@@ -68,6 +68,11 @@ class SpoolHolders:
         if spool_id and spool_id in self.spools_by_id:
             del self.spools_by_id[spool_id]
 
+    # Drops the tag report only: the tool pick and the firmware color stay as they are.
+    def forget_tag(self, channel):
+        if 0 <= channel < EXTRUDERS_COUNT:
+            self.spool_holders[channel] = None
+
     def lane_is_tagged(self, channel):
         holder = self.spool_holders[channel] if 0 <= channel < EXTRUDERS_COUNT else None
         return bool(holder) and not is_untagged_filament(holder)

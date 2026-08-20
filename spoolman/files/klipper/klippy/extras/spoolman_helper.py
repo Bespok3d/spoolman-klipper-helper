@@ -6,9 +6,11 @@ surface. The two data-file paths below are deployment facts of the Bespok3d U1 i
 stock Klipper machine would keep these files elsewhere), injected here so no concern module
 hardcodes them.
 """
+from .spoolman.active_spool import coerce_spool_id
 from .spoolman.afc import push_spool_to_afc
 from .spoolman.carrier_watch import CarrierWatch
 from .spoolman.commands import Commands
+from .spoolman.filament_info import is_untagged_filament
 from .spoolman.helper_options import HelperOptions
 from .spoolman.lane_report import LaneReport
 from .spoolman.logs import Logs
@@ -18,7 +20,7 @@ from .spoolman.print_lifecycle import PrintLifecycle
 from .spoolman.print_task_writer import PrintTaskWriter
 from .spoolman.spool_detection import SpoolDetection
 from .spoolman.spool_holders import SpoolHolders
-from .spoolman.spool_resolution import SpoolResolution
+from .spoolman.spool_resolution import SPOOLMAN_CONNECTED_ENDPOINT, SpoolResolution
 from .spoolman.spoolman import Spoolman
 from .spoolman.tracking import SpoolTracking
 from .spoolman.u1_tools import EXTRUDERS_COUNT, U1Tools
@@ -56,6 +58,9 @@ class SpoolmanHelper:
             self.logs, self.macros, self.push_spool_to_afc, self._lane_has_filament
         )
         self.resolution = SpoolResolution(self)
+        self.printer.lookup_object("webhooks").register_endpoint(
+            SPOOLMAN_CONNECTED_ENDPOINT, self.resolution.on_spoolman_connected
+        )
         self.detection = SpoolDetection(self, RFID_DATA_FILE)
         self.manual_restore = ManualSpoolRestore(self, MANUAL_SPOOLS_FILE)
         self.report = LaneReport(self)
@@ -86,10 +91,33 @@ class SpoolmanHelper:
         self.logs.warn("No notification source available, spool tracking disabled")
 
     def _on_filament_update(self, channel, info, is_clear):
-        if is_clear:
-            self.clear_spool_for_channel(channel)
-        else:
+        pending_pick, from_detect = self.detection.take_pending_pick(channel)
+        if from_detect:
+            self._on_detect_report(channel, info, is_clear, pending_pick)
+            return
+        if not is_clear:
             self.set_spool_for_channel(channel, info)
+            return
+        # A re-read with no tag is not an empty lane. Filament still sitting in the
+        # channel keeps its hand-picked spool, color and material; only a sensor that
+        # says the channel is empty may wipe them.
+        if self._lane_has_filament(channel):
+            self.holders.forget_tag(channel)
+            self.apply_spool_for_extruder(channel)
+            return
+        self.clear_spool_for_channel(channel)
+
+    # DETECT_SPOOLS asked for a fresh RFID read. A tag replaces whatever was there. No tag
+    # restores the pick captured before the re-read, from the tool macro or the AFC lane,
+    # without consulting filament_exist: this is a retry, not a pull.
+    def _on_detect_report(self, channel, info, is_clear, pending_pick):
+        if not is_clear and not is_untagged_filament(info):
+            self.set_spool_for_channel(channel, info)
+            return
+        self.holders.forget_tag(channel)
+        pick = coerce_spool_id(pending_pick) or self.resolution.current_manual_pick(channel)
+        if pick:
+            self.resolution.reapply_preserved_pick(channel, pick)
 
     def push_spool_to_afc(self, channel, spool_id):
         push_spool_to_afc(self.printer, channel, spool_id, EXTRUDERS_COUNT)

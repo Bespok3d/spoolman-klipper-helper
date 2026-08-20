@@ -2,9 +2,10 @@
 """Screen/lane writes: composition + the live official-channel and already-matches guards."""
 import base64
 
-from print_task_writer import (
+from spoolman.print_task_writer import (
     PrintTaskWriter,
     config_already_matches,
+    filament_config_args_forcing_an_official_channel,
     filament_config_args_from_spool,
     filament_config_clear_args,
     normalize_color_rgba,
@@ -122,12 +123,19 @@ class FakePrintTaskConfig:
         self.print_task_config = config
 
 
+class FakePrintStats:
+    def __init__(self, state):
+        self.state = state
+
+
 class FakePrinter:
-    def __init__(self, task_config):
+    def __init__(self, task_config, print_state=""):
         self.task = FakePrintTaskConfig(task_config)
+        self.print_stats = FakePrintStats(print_state)
 
     def lookup_object(self, name, default=None):
-        return self.task if name == "print_task_config" else default
+        objects = {"print_task_config": self.task, "print_stats": self.print_stats}
+        return objects.get(name, default)
 
 
 class RecordingLogs:
@@ -150,13 +158,24 @@ def empty_task_config():
     }
 
 
-def build_writer(task_config, spoolman_overrides_tag=False):
+def build_writer(task_config, spoolman_overrides_tag=False, print_state=""):
     macros = RecordingMacros()
     writer = PrintTaskWriter(
-        FakePrinter(task_config), RecordingLogs(), macros,
+        FakePrinter(task_config, print_state), RecordingLogs(), macros,
         spoolman_overrides_tag=spoolman_overrides_tag,
     )
     return writer, macros
+
+
+def end_the_print(writer):
+    writer.printer.print_stats.state = "complete"
+
+
+def config_writes_sent(macros):
+    return [
+        command for command in macros.commands
+        if command.startswith("SET_PRINT_FILAMENT_CONFIG")
+    ]
 
 
 def test_normalize_color_rgba():
@@ -294,11 +313,28 @@ def test_a_tagged_lane_is_never_overwritten_with_spoolman_data():
 
 def test_the_override_switch_lets_a_spoolman_pick_rewrite_a_tagged_lane():
     # The experiment switch: precedence flips, so the same tagged lane is written after all.
+    # FORCE=1 is required; without it the firmware raises "official filament, not configurable".
     task = empty_task_config()
     task["filament_official"][3] = True
     writer, macros = build_writer(task, spoolman_overrides_tag=True)
     writer.apply_spool(3, SPOOL)
-    assert macros.commands[0] == EXPECTED_GCODE
+    assert macros.commands[0] == (
+        'SET_PRINT_FILAMENT_CONFIG CONFIG_EXTRUDER=3 FORCE=1 VENDOR="FlashForge" '
+        'FILAMENT_TYPE="PLA" FILAMENT_SUBTYPE="Basic" FILAMENT_COLOR_RGBA=3FD2C5FF'
+    )
+
+
+def test_an_untagged_write_does_not_send_force():
+    writer, macros = build_writer(empty_task_config())
+    writer.apply_spool(3, SPOOL)
+    assert "FORCE=" not in macros.commands[0]
+
+
+def test_forcing_an_official_channel_inserts_force_after_the_extruder():
+    forced = filament_config_args_forcing_an_official_channel(
+        filament_config_args_from_spool(SPOOL, 3))
+    assert list(forced)[:2] == ["CONFIG_EXTRUDER", "FORCE"]
+    assert forced["FORCE"] == "1"
 
 
 def test_apply_spool_skips_matching_config_but_still_pushes_name():
@@ -328,6 +364,66 @@ def test_clear_already_empty_slot_is_a_no_op():
     writer, macros = build_writer(empty_task_config())
     writer.clear_extruder(3)
     assert macros.commands == []
+
+
+def test_a_spool_picked_while_printing_leaves_the_running_print_alone():
+    # The firmware resets the live extruder's pressure advance on every config write it takes,
+    # so mid print the write waits. The lane card still gets its label: it changes nothing.
+    writer, macros = build_writer(empty_task_config(), print_state="printing")
+    writer.apply_spool(3, SPOOL)
+    assert config_writes_sent(macros) == []
+    assert macros.commands[0].startswith("SET_LANE_FILAMENT_NAME EXTRUDER=3")
+
+
+def test_a_paused_print_holds_the_write_too():
+    writer, macros = build_writer(empty_task_config(), print_state="paused")
+    writer.apply_spool(3, SPOOL)
+    assert config_writes_sent(macros) == []
+
+
+def test_the_held_write_goes_out_once_the_print_is_over():
+    writer, macros = build_writer(empty_task_config(), print_state="printing")
+    writer.apply_spool(3, SPOOL)
+    end_the_print(writer)
+    writer.release_writes_held_during_print()
+    assert config_writes_sent(macros) == [EXPECTED_GCODE]
+
+
+def test_only_the_last_spool_picked_during_a_print_is_written():
+    writer, macros = build_writer(empty_task_config(), print_state="printing")
+    writer.apply_spool(3, NAME_CARRIES_SUBTYPE_SPOOL)
+    writer.apply_spool(3, SPOOL)
+    end_the_print(writer)
+    writer.release_writes_held_during_print()
+    assert config_writes_sent(macros) == [EXPECTED_GCODE]
+
+
+def test_clearing_an_extruder_while_printing_blanks_the_lane_and_waits():
+    task = empty_task_config()
+    task["filament_vendor"][3] = "FlashForge"
+    task["filament_type"][3] = "PLA"
+    writer, macros = build_writer(task, print_state="printing")
+    writer.clear_extruder(3)
+    assert macros.commands == [set_lane_filament_name_gcode(3, "")]
+    end_the_print(writer)
+    writer.release_writes_held_during_print()
+    assert config_writes_sent(macros) == [
+        set_print_filament_config_gcode(filament_config_clear_args(3))
+    ]
+
+
+def test_a_held_write_the_printer_already_carries_is_dropped():
+    # Something else put that spool in the slot while the print ran: nothing left to send.
+    task = empty_task_config()
+    writer, macros = build_writer(task, print_state="printing")
+    writer.apply_spool(3, SPOOL)
+    task["filament_vendor"][3] = "FlashForge"
+    task["filament_type"][3] = "PLA"
+    task["filament_sub_type"][3] = "Basic"
+    task["filament_color_rgba"][3] = "3FD2C5FF"
+    end_the_print(writer)
+    writer.release_writes_held_during_print()
+    assert config_writes_sent(macros) == []
 
 
 def test_label_lane_pushes_the_slicer_description():

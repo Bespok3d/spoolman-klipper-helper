@@ -2,6 +2,7 @@
 """Resolving holders to Spoolman ids, the tool->spool queries, and the UID-bind entry."""
 import json
 import types
+from pathlib import Path
 
 from klipper_fakes import (
     FakePrinter,
@@ -13,7 +14,7 @@ from klipper_fakes import (
 from spoolman import card_uids
 from spoolman.print_task_writer import slicer_filament_description
 from spoolman.spool_holders import SpoolHolders
-from spoolman.spool_resolution import SpoolResolution
+from spoolman.spool_resolution import SPOOLMAN_CONNECTED_ENDPOINT, SpoolResolution
 from spoolman.spoolman import Spoolman
 from spoolman.unmatched_tag import REGISTER_REFUSED
 
@@ -91,8 +92,13 @@ class RecordingSpoolman:
 
 class RecordingWriter:
     def __init__(self):
+        self.applied_spools = []
         self.labelled_lanes = []
         self.blanked_lanes = []
+
+    def apply_spool(self, extruder, spool):
+        self.applied_spools.append((extruder, spool))
+        return self.label_lane(extruder, spool)
 
     def label_lane(self, extruder, spool):
         self.labelled_lanes.append((extruder, spool))
@@ -122,6 +128,7 @@ def build_resolution(mode="auto", extruder_by_tool=None, **spoolman_traits):
     logs = RecordingLogs()
     macros = RecordingMacros()
     afc_pushes = []
+    remembered = []
     helper = types.SimpleNamespace(
         logs=logs,
         macros=macros,
@@ -131,11 +138,16 @@ def build_resolution(mode="auto", extruder_by_tool=None, **spoolman_traits):
         tracking=RecordingTracking(),
         mode=mode,
         logging="info",
+        printer=types.SimpleNamespace(lookup_object=lambda name, default=None: default),
         push_spool_to_afc=lambda channel, spool_id: afc_pushes.append((channel, spool_id)),
+        remember_manual_spool=lambda tool_index, spool_id: remembered.append(
+            (tool_index, spool_id)
+        ),
     )
     helper.holders = SpoolHolders(
         logs, macros, helper.push_spool_to_afc, lambda channel: True
     )
+    helper.remembered = remembered
     resolution = SpoolResolution(helper)
     return resolution, helper, afc_pushes
 
@@ -147,7 +159,33 @@ def test_apply_binds_and_mirrors_a_resolved_spool_everywhere():
     assert helper.holders.spools_by_id[104] == dict(TAGGED)
     assert helper.macros.tool_spool_sets == [("T2", 104)]
     assert afc_pushes == [(2, 104)]
+    assert helper.writer.applied_spools == [(2, SPOOLMAN_SPOOL)]
     assert helper.writer.labelled_lanes == [(2, SPOOLMAN_SPOOL)]
+
+
+def test_a_resolved_tag_writes_the_spoolman_record_the_slicer_reads():
+    # Live on E3 / spool 16: Fluidd already showed "Polymaker PLA Silk" from the lane name,
+    # but Snapmaker Orca still read filament_sub_type Basic because a tagged lane only named
+    # the AFC card and never called apply_spool.
+    silk = {
+        "id": 16,
+        "filament": {
+            "name": "Gold",
+            "material": "PLA",
+            "color_hex": "B56600",
+            "vendor": {"name": "Polymaker"},
+            "extra": {"variant": '"Silk"'},
+        },
+    }
+    resolution, helper, _afc_pushes = build_resolution()
+    helper.spoolman.fetch_spool = lambda spool_id, on_spool: on_spool(silk)
+    helper.holders.spool_holders[3] = {
+        "VENDOR": "Polymaker", "MAIN_TYPE": "PLA", "SUB_TYPE": "Silk",
+        "ARGB_COLOR": "B56600FF", "SPOOL_ID": 16, "SKU": "0",
+    }
+    resolution.apply_spool_for_extruder(3)
+    assert helper.writer.applied_spools == [(3, silk)]
+    assert slicer_filament_description(silk) == "Polymaker PLA Silk"
 
 
 def test_apply_with_no_holder_warns_and_never_resolves():
@@ -299,8 +337,63 @@ def test_a_lane_with_no_tag_says_nothing_and_searches_for_nothing():
         resolve_result=None, candidates=[SPOOLMAN_SPOOL])
     helper.holders.spool_holders[0] = {"VENDOR": "NONE", "MAIN_TYPE": "", "SPOOL_ID": None}
     resolution.apply_spool_for_extruder(0)
+    assert helper.spoolman.resolved_infos == []
     assert helper.spoolman.searched_infos == []
+    assert helper.macros.tool_spool_sets == []
+    assert helper.writer.blanked_lanes == []
     assert not any("look like this tag" in line for line in helper.logs.lines)
+
+
+def test_untagged_lane_with_a_manual_pick_reapplies_that_spool():
+    resolution, helper, afc_pushes = build_resolution()
+    helper.macros.spool_id_by_tool[1] = 55
+    helper.holders.spool_holders[1] = {"VENDOR": "NONE", "MAIN_TYPE": "", "SPOOL_ID": None}
+    resolution.apply_spool_for_extruder(1)
+    assert helper.spoolman.resolved_infos == []
+    assert helper.macros.tool_spool_sets == []
+    assert afc_pushes == [(1, 55)]
+    assert helper.remembered == [(1, 55)]
+    assert helper.writer.blanked_lanes == []
+    assert helper.writer.applied_spools == [(1, SPOOLMAN_SPOOL)]
+    assert helper.spoolman.fetched_spool_ids == [55]
+
+
+def test_empty_holder_with_a_manual_pick_reapplies_that_spool():
+    resolution, helper, afc_pushes = build_resolution()
+    helper.macros.spool_id_by_tool[2] = 55
+    resolution.apply_spool_for_extruder(2)
+    assert helper.spoolman.resolved_infos == []
+    assert helper.macros.tool_spool_sets == []
+    assert afc_pushes == [(2, 55)]
+    assert helper.remembered == [(2, 55)]
+    assert helper.writer.applied_spools == [(2, SPOOLMAN_SPOOL)]
+    assert helper.writer.blanked_lanes == []
+
+
+def test_untagged_lane_without_a_pick_does_not_wipe_firmware_config():
+    resolution, helper, afc_pushes = build_resolution()
+    helper.holders.spool_holders[1] = {"VENDOR": "NONE", "MAIN_TYPE": "", "SPOOL_ID": None}
+    resolution.apply_spool_for_extruder(1)
+    assert helper.spoolman.resolved_infos == []
+    assert helper.macros.tool_spool_sets == []
+    assert afc_pushes == []
+    assert helper.remembered == []
+    assert helper.writer.blanked_lanes == []
+    assert helper.writer.applied_spools == []
+
+
+def test_afc_lane_pick_without_a_macro_is_reapplied():
+    resolution, helper, afc_pushes = build_resolution()
+    lane = types.SimpleNamespace(spool_id=94)
+    helper.printer.lookup_object = (
+        lambda name, default=None, lane=lane: lane if name == "AFC_lane E3" else default
+    )
+    resolution.apply_spool_for_extruder(3)
+    assert helper.spoolman.resolved_infos == []
+    assert helper.macros.tool_spool_sets == [("T3", 94)]
+    assert afc_pushes == [(3, 94)]
+    assert helper.remembered == [(3, 94)]
+    assert helper.writer.applied_spools == [(3, SPOOLMAN_SPOOL)]
 
 
 def test_a_lane_that_matches_no_spool_gives_its_panel_name_back():
@@ -309,6 +402,7 @@ def test_a_lane_that_matches_no_spool_gives_its_panel_name_back():
     helper.holders.spool_holders[0] = {**TAGGED, "SPOOL_ID": None}
     resolution.apply_spool_for_extruder(0)
     assert helper.writer.blanked_lanes == [0]
+    assert helper.writer.applied_spools == []
     assert helper.writer.labelled_lanes == []
 
 
@@ -370,6 +464,7 @@ def test_link_spool_puts_the_lane_on_the_spool_it_was_just_linked_to():
     assert helper.holders.spool_holders[1]["SPOOL_ID"] == 42
     assert helper.macros.tool_spool_sets == [("T1", 42)]
     assert afc_pushes == [(1, 42)]
+    assert helper.writer.applied_spools == [(1, SPOOLMAN_SPOOL)]
     assert helper.writer.labelled_lanes == [(1, SPOOLMAN_SPOOL)]
 
 
@@ -381,6 +476,7 @@ def test_link_spool_leaves_the_lane_alone_when_the_reel_belongs_to_another_spool
     assert helper.holders.spool_holders[1]["SPOOL_ID"] is None
     assert helper.macros.tool_spool_sets == []
     assert afc_pushes == []
+    assert helper.writer.applied_spools == []
     assert helper.writer.labelled_lanes == []
 
 
@@ -403,6 +499,7 @@ def test_the_add_names_the_lane_from_the_spool_it_just_made_and_asks_spoolman_no
     helper.holders.spool_holders[1] = {**TAGGED, "SPOOL_ID": None,
                                        "CARD_UID": [0x04, 0xA1, 0xB2, 0xC3]}
     resolution.add_spool_from_tag(1)
+    assert helper.writer.applied_spools == [(1, SPOOLMAN_SPOOL)]
     assert helper.writer.labelled_lanes == [(1, SPOOLMAN_SPOOL)]
     assert helper.spoolman.fetched_spool_ids == []
 
@@ -628,3 +725,31 @@ def test_a_spool_id_on_the_tag_still_wins_over_both():
     resolved, requested = resolve_through_real_chain({**STOCK_SNAPMAKER_TAG, "SPOOL_ID": 104})
     assert resolved == [104]
     assert requested == []
+
+
+def test_a_lane_parked_on_a_dead_spoolman_re_resolves_when_the_connection_comes_up():
+    resolution, helper, _afc_pushes = build_resolution(
+        resolve_result=None, spoolman_unanswered=True)
+    helper.holders.spool_holders[2] = {**TAGGED, "SPOOL_ID": None}
+    resolution.apply_spool_for_extruder(2)
+    assert resolution.channels_awaiting_spoolman == {2}
+    helper.spoolman.resolve_result = SPOOLMAN_SPOOL
+    helper.spoolman.spoolman_unanswered = False
+    resolution.retry_lanes_awaiting_spoolman()
+    assert helper.macros.tool_spool_sets[-1] == ("T2", 104)
+    assert resolution.channels_awaiting_spoolman == set()
+
+
+def test_a_tag_that_matched_nothing_with_spoolman_answering_is_not_parked():
+    resolution, helper, _afc_pushes = build_resolution(
+        resolve_result=None, registration=REFUSES_TO_REGISTER)
+    helper.holders.spool_holders[1] = {**TAGGED, "SPOOL_ID": None}
+    resolution.apply_spool_for_extruder(1)
+    assert resolution.channels_awaiting_spoolman == set()
+
+
+def test_the_connected_endpoint_is_the_one_the_moonraker_proxy_pushes():
+    proxy_source = (
+        Path(__file__).resolve().parents[1] / "files" / "moonraker" / "spoolman_proxy.py"
+    ).read_text()
+    assert SPOOLMAN_CONNECTED_ENDPOINT in proxy_source

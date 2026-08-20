@@ -153,8 +153,10 @@ every behavior below.
   and everything you already do to control that string controls the card too.
 - **Color, material, and vendor** always come from the firmware's print task (per physical
   extruder). Both the AFC panel and the touchscreen read them from there. The helper writes a
-  Spoolman pick back into the print task in-process, using the firmware's own
-  `SET_PRINT_FILAMENT_CONFIG` command (no patches, persisted like a screen edit).
+  resolved Spoolman spool back into the print task in-process, using the firmware's own
+  `SET_PRINT_FILAMENT_CONFIG` command (no patches, persisted like a screen edit). A tagged lane
+  is included in that write only when **Spoolman pick overrides a tagged lane** is on; off, the
+  firmware keeps what the tag filed.
 
 ### Scenarios
 
@@ -162,16 +164,21 @@ Each line is: **what you have** then how the name behaves, then how color/materi
 
 - **No tags, no Spoolman:** no name; color/material are whatever the print task already holds
   (screen-set or default).
-- **RFID-tagged spool:** name from the tag's spool; color/material written by the firmware from
-  the tag. The bridge never touches a tagged lane.
+- **RFID-tagged spool:** name from the tag's Spoolman spool, so the AFC card already shows brand,
+  material and sub-type. Color/material stay what the firmware filed from the tag, unless
+  **Spoolman pick overrides a tagged lane** is on, in which case the Spoolman record is written
+  there too (that is what Snapmaker Orca reads).
 - **Untagged, set on the screen:** no name (there is no spool); color/material come from the screen.
 - **Untagged, picked in Spoolman:** name shows live from the pick; the bridge writes color/material
-  so the screen and AFC agree, and makes the picked spool the active/tracked spool.
+  so the screen and AFC agree, and makes the picked spool the active/tracked spool. `DETECT_SPOOLS`
+  keeps that pick whether you chose it on the printer or in the AFC panel: a lane with no tag is
+  not cleared just because the re-read found no RFID, and color and material are written back if
+  the firmware re-read blanked them.
 - **Untagged, loaded but not picked:** shown as `UNKNOWN` (present but unidentified) rather than
   empty, in the helper's logs and `DUMP_SPOOLS`.
-- **Untagged, picked mid-print:** name and the active spool update live; only the firmware
-  color/material write is deferred to when the print leaves printing/paused (the firmware can
-  reject it mid-print).
+- **Picked or identified mid-print:** name and the active spool update live; only the firmware
+  color/material write is deferred to when the print leaves printing/paused. This holds however the
+  spool was identified, by hand or by tag.
 - **Spool cleared for a tool:** name clears, and the lane's color/material are reset to empty on the
   screen and AFC. `CLEAR_ALL_SPOOLS` clears every lane, including RFID-tagged ones.
 - **Untagged filament pulled out:** a manually picked spool whose filament you physically remove is
@@ -182,13 +189,19 @@ Each line is: **what you have** then how the name behaves, then how color/materi
 
 ### Gotchas
 
-- The bridge only ever writes **untagged** lanes, and without `FORCE`, so it can never override
-  an RFID tag. The tag is always the source of truth.
+- The bridge never writes an official tagged lane unless **Spoolman pick overrides a tagged lane**
+  is on. On, it sends `FORCE=1` so the firmware accepts the Spoolman brand, material and sub-type
+  on a tagged lane (without that flag it raises `official filament, not configurable`). Off, the
+  tag stays the source of truth for color, material and sub-type; the AFC name still comes from
+  Spoolman.
 - It acts only on the 4 physical lanes (the tools that map to physical extruders 0 to 3 in the
   U1's virtual-tool table). A virtual tool with no physical mapping is skipped.
-- A spool picked while a print is running or paused is **deferred**: the name updates live, and
-  the color/material land the moment the print leaves printing/paused. This is by design, since
-  the firmware can reject the untagged write mid-print.
+- Any spool change while a print is running or paused is **deferred**: the name updates live, and
+  the color/material land the moment the print leaves printing/paused. This is by design: the
+  printer resets its pressure advance every time it accepts that write, so a write landing
+  mid-print would change how the running print extrudes (and the firmware can reject it outright).
+  Only the last change per lane is sent when the print ends, and it is dropped if the printer
+  already carries it.
 - After installing or updating, Moonraker restarts and the AFC frontends' service worker may
   serve stale JavaScript. If a panel looks wrong, hard-refresh the browser.
 
@@ -224,7 +237,10 @@ slicer:
 - `CLEAR_ALL_SPOOLS` clears the selected spool for every tool, including RFID-tagged lanes.
 - `DETECT_SPOOLS` re-detects every loaded spool. It is the last line of defence when something did not
   detect properly: it forces the detection again without you pulling the spool off the printer and
-  putting it back on.
+  putting it back on. Tagged lanes resolve from RFID and replace the previous pick. Untagged lanes
+  that already have a Spoolman pick, chosen on the printer or in the AFC panel, keep that pick
+  (color and material are written back if the firmware re-read blanked them). Untagged lanes with
+  no pick are left as they are.
 - `DUMP_SPOOLS` prints what the bridge knows about each lane (labelled `T0:`..`T3:`; an empty lane
   reads `empty`, a manually assigned one shows the spool).
 - `SH_CONFIG MODE=<auto|manual> LOGS=<level>` changes the module's behavior at runtime
@@ -253,10 +269,12 @@ slicer:
 - **This printer's name (Spoolman location)**: leave empty to use this printer's own name
   automatically; set it to override.
 - **Spoolman pick overrides a tagged lane** (off by default): who wins when a lane has both an RFID
-  tag and a spool picked in Spoolman. Off, the tag wins. On, Spoolman wins. Coming from the extended
-  firmware, if your spool profiles depend on Spoolman: turn this on, or a tagged lane goes by what
-  is written on the tag and your Spoolman profile is ignored. On is new ground: the printer may
-  still refuse to change a tagged lane.
+  tag and a spool in Spoolman. Off, the tag wins on the firmware config the slicer reads. On, the
+  Spoolman record is written there too, so a tagged spool with `variant` Silk is announced as Silk,
+  not whatever the firmware had filed. Coming from the extended firmware, if your spool profiles
+  depend on Spoolman: turn this on, or a tagged lane goes by what is written on the tag and your
+  Spoolman profile is ignored. On sends `FORCE=1`, because the firmware otherwise refuses to change
+  a tagged lane.
 - **Where the sub-type comes from** (`sub_type,variant,name_inferred` by default): the order the
   three sub-type sources are tried in, first one with a value wins. Reorder them to change which
   wins, drop one to stop reading it at all. See
@@ -288,9 +306,10 @@ in Orca's **Device** tab: read it there and name a preset the same.
 Plain OrcaSlicer matches differently, and how it should behave is being worked out with one of its
 developers. Everything here is about Snapmaker Orca.
 
-A lane with a tag in it is not written from Spoolman: the tag wins, and what the tag says is what
-the slicer sees. **Spoolman pick overrides a tagged lane** flips that around. The RFID Spool
-Reader's own doc covers naming tags.
+A lane with a tag in it always gets its AFC name from Spoolman. The firmware config the slicer
+reads stays what the tag filed, unless **Spoolman pick overrides a tagged lane** is on: then the
+same Spoolman sub-type (from `sub_type`, `variant`, or the name) is filed there too, so Fluidd
+and Snapmaker Orca stop disagreeing. The RFID Spool Reader's own doc covers naming tags.
 
 A spool you had already picked keeps the name it was filed under until you pick it again, because
 the printer only files a spool when the choice changes.
@@ -349,10 +368,34 @@ The two manual routes still work and still stop a tag from missing in the first 
   it tells you when there is none.
 
 Whenever a lane looks wrong for any other reason, `DETECT_SPOOLS` is the last line of defence: it
-re-reads every lane and resolves them again, so you can force the detection without rebooting and
-without pulling the spool off the printer and putting it back on. It is the retry, not the cure: if
-Spoolman genuinely has no filament matching that tag, `DETECT_SPOOLS` fails exactly the same way, and
-the two fixes above are what stop it for good.
+re-reads every lane and resolves the tagged ones again, so you can force the detection without
+rebooting and without pulling the spool off the printer and putting it back on. A lane with no tag
+keeps the spool you picked by hand, on the printer or in the AFC panel, and a lane with no pick
+keeps the color and material already on the screen. It is the retry, not the cure: if Spoolman
+genuinely has no filament matching that tag, `DETECT_SPOOLS` fails exactly the same way, and the
+two fixes above are what stop it for good.
+
+## Verifying on a real printer
+
+`spoolman/tests_invitro/` is a pytest suite that runs against a live printer and checks the plugin
+end to end: the AFC card names, the firmware filament fields the slicer reads, manual picks, the
+`spoolman_overrides_tag` switch, and `SH_DETECT_SPOOLS`. It never runs in the repo gate; you point
+it at a printer explicitly:
+
+```sh
+B3D_HIL_HOST=<printer-address> bash scripts/invitro.sh
+```
+
+That runs the read-only tier: it observes the printer and changes nothing. Adding
+`B3D_INVITRO_MUTATE=1` also runs the mutating tier, which picks spools, flips the priority option
+(editing the installed config over SSH and restarting Klipper), and re-reads tags. Every mutating
+test restores what it changed, but only run it on a printer that is idle and yours to disturb; the
+suite refuses to mutate a printer that is printing.
+
+The SSH steps use the firmware's stock root login by default; set `B3D_HIL_SSH_USER` and
+`B3D_HIL_SSH_PASS` if the printer's credentials differ. The expectations are computed by the
+plugin's own composer over the live Spoolman records, so a red test means the printer disagrees
+with what the shipped code promises, not with a hardcoded fixture.
 
 ## Troubleshooting
 
