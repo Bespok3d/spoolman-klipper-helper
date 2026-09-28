@@ -1,54 +1,57 @@
 # SPDX-FileCopyrightText: Copyright (C) 2026 unlucio and the Bespok3d contributors
 # SPDX-License-Identifier: AGPL-3.0-or-later
 name: build-and-release
-
-# Build, test, pack, and release every plugin in this repo through the one reusable Bespok3d build
-# Action (b3-builder), then register the produced atoms into the org's main index. This repo publishes
-# no list of its own: it contributes atoms to someone else's index, so it passes no list inputs and the
-# registration is a separate org-owned step.
 on:
   push:
-    tags:
-      # A release is published by a version tag and by nothing else. A push to main used to publish,
-      # which handed every enrolled printer a package built from whatever main happened to hold, work
-      # in progress included. scripts/tag_version_guard.sh refuses a tag naming a plugin this repo
-      # does not hold, or a number the plugin's manifest does not declare, so the tag cannot lie
-      # about what it publishes. The shared release-trigger detector fails the gate if a branch
-      # trigger is ever added back.
-      - 'plugin-*-v*'
+    tags: ['plugin-*-v*']
   workflow_dispatch:
+    inputs:
+      prospective-tag: { type: string, required: true }
+      selected-ids: { type: string, required: true }
+      expected-source-sha: { type: string, required: true }
+      release-kind: { type: choice, options: [draft, prerelease, live], default: draft }
+      publish: { type: boolean, default: false }
+      prepared-receipt: { type: string, default: '' }
+
+concurrency:
+  group: unit-release-${{ github.repository }}
+  cancel-in-progress: false
 
 jobs:
   build-and-release:
     runs-on: ubuntu-latest
     permissions:
-      contents: write   # create releases on this repo
+      actions: read
+      contents: write
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-
-      # The Run workflow button stays usable: this step, not a job level `if`, is what decides.
-      # A manual run against a release tag republishes it; a manual run against a branch is refused
-      # here, loudly, instead of skipping the job and reporting success.
-      - name: Refuse a ref that is not a plugin release tag
-        run: sh scripts/tag_version_guard.sh "${{ github.ref_name }}"
-
-      - uses: Bespok3d/b3-builder@b698ae5fdf713ff7994c0c95e7d062c4a42547dd  # main @ 2026-09-25
+      - name: Check selected release tag
+        env:
+          RELEASE_TAG: ${{ inputs.prospective-tag || github.ref_name }}
+        run: sh scripts/tag_version_guard.sh "$RELEASE_TAG"
+      - id: release
+        uses: Bespok3d/b3-builder@5ac544b30634961cbad39659ebbb99172de68c64
         with:
+          managed-release: 'true'
+          release-tag: ${{ inputs.prospective-tag }}
+          selected-ids: ${{ inputs.selected-ids }}
+          expected-source-sha: ${{ inputs.expected-source-sha }}
+          release-kind: ${{ inputs.release-kind }}
+          publish: ${{ github.event_name == 'push' || inputs.publish }}
+          prepared-receipt: ${{ inputs.prepared-receipt }}
+          require-signature: 'true'
+          register-commit: df4eec856264bebffaa37d93ab1c51363fd6ef92
           unit: repo
-          # Per-repo Actions secret today (GitHub Free cannot org-secret private repos); becomes ONE org
-          # secret every repo inherits when the repos go public. See b3-builder README (secrets model).
           signing-key: ${{ secrets.REGISTRY_SIGNING_KEY }}
           bake: 'false'
           atom-repo: ${{ github.repository }}
-          # This repo requires a service a plugin in ANOTHER repo provides, so the build reads the org
-          # index to learn which plugin id that is. Without it the requirement has no id to resolve to
-          # and the build stops rather than publishing a name no registry can serve.
           provider-indexes: https://raw.githubusercontent.com/Bespok3d/main-index/main/index.json
-
-      - uses: Bespok3d/main-index/.github/actions/register-atoms@3d4fa2adb4f39aa22b7112ff26fd9522db7b4827  # main @ 2026-07-26
+      - uses: Bespok3d/main-index/.github/actions/register-atoms@df4eec856264bebffaa37d93ab1c51363fd6ef92
+        if: ${{ steps.release.outputs.publish == 'true' }}
         with:
-          # Per-repo Actions secret today (GitHub Free cannot org-secret private repos); becomes ONE org
-          # secret every repo inherits when the repos go public.
+          atoms-dir: dist/registration
+          selected-ids: ${{ steps.release.outputs.selected-ids }}
+          release-kind: ${{ steps.release.outputs.release-kind }}
           token: ${{ secrets.MAIN_INDEX_TOKEN }}
