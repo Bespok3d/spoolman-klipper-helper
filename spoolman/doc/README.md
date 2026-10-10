@@ -80,7 +80,9 @@ arranged your dashboard, so look around for it.
 A spool is matched to your Spoolman inventory by a chain of identities, tried in order, first
 match wins. By default that order is `spool_id, uid, sku`:
 
-- **spool_id**: an explicit Spoolman spool id encoded on the tag.
+- **spool_id**: an explicit Spoolman spool id encoded on the tag. An OpenSpool card written without
+  a `spool_id` field reaches the bridge as `"0"` (the RFID reader's default); that counts as no id,
+  so the chain moves on to the UID.
 - **uid**: the tag's hardware UID, bound to a spool in Spoolman. This is how a tag the printer
   cannot fully decode still gets tracked: once its UID is bound to a spool, every later tap
   resolves straight to that spool.
