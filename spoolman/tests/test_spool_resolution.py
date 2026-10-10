@@ -204,6 +204,34 @@ def test_a_dict_resolution_fills_the_holders_missing_spool_id():
     assert helper.macros.tool_spool_sets == [("T0", 104)]
 
 
+# An OpenSpool card written without a spool_id field gets the RFID reader's default, the STRING
+# "0". The chain already skips it and matches the card by UID, but the lane then kept the "0"
+# (a non-empty string is truthy), set T0 to spool '0' and asked Spoolman for /spool/0, a 404 on
+# every read. The placeholder must count as "no id" so the UID match is what the lane binds.
+OPENSPOOL_PLACEHOLDER_SPOOL_ID = "0"
+
+
+def test_a_placeholder_spool_id_on_the_tag_gives_way_to_the_uid_match():
+    resolution, helper, afc_pushes = build_resolution(resolve_result=SPOOLMAN_SPOOL)
+    holder = {**TAGGED, "SPOOL_ID": OPENSPOOL_PLACEHOLDER_SPOOL_ID}
+    helper.holders.spool_holders[0] = holder
+    resolution.apply_spool_for_extruder(0)
+    assert holder["SPOOL_ID"] == 104
+    assert helper.macros.tool_spool_sets == [("T0", 104)]
+    assert afc_pushes == [(0, 104)]
+    assert helper.spoolman.fetched_spool_ids == [104]
+
+
+def test_a_placeholder_spool_id_with_no_match_retracts_the_lane_instead_of_binding_it():
+    resolution, helper, afc_pushes = build_resolution(
+        resolve_result=None, candidates=[SPOOLMAN_SPOOL])
+    helper.holders.spool_holders[0] = {**TAGGED, "SPOOL_ID": OPENSPOOL_PLACEHOLDER_SPOOL_ID}
+    resolution.apply_spool_for_extruder(0)
+    assert helper.macros.tool_spool_sets == [("T0", None)]
+    assert afc_pushes == [(0, None)]
+    assert helper.spoolman.fetched_spool_ids == []
+
+
 def test_unresolvable_holder_warns_and_retracts_the_spool_that_was_there_before():
     resolution, helper, afc_pushes = build_resolution(
         resolve_result=None, candidates=[SPOOLMAN_SPOOL])

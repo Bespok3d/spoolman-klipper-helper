@@ -25,6 +25,16 @@ from .unmatched_tag import (
 SPOOLMAN_CONNECTED_ENDPOINT = "spoolman_helper/spoolman_connected"
 
 
+# The chain answers with the tag's own spool id when that strategy matched, or with the whole
+# Spoolman spool record when the UID or the SKU did. Either way the lane binds the id inside.
+# A tag's id is read through coerce_spool_id too: an OpenSpool card written without a spool_id
+# field gets the RFID reader's default, the string "0", which is truthy yet names no spool at all.
+def spool_id_of_resolution(resolved):
+    if isinstance(resolved, dict):
+        return coerce_spool_id(resolved.get("id"))
+    return coerce_spool_id(resolved)
+
+
 class SpoolResolution:
     def __init__(self, helper):
         self.helper = helper
@@ -50,17 +60,14 @@ class SpoolResolution:
         )
 
         def on_resolve_spool(resolved, spoolman_unanswered, spool=spool):
-            if resolved:
-                if not spool.get("SPOOL_ID") and resolved.get("id"):
-                    spool["SPOOL_ID"] = resolved["id"]
-                spool_id = spool.get("SPOOL_ID") or resolved.get("id")
-            else:
-                spool_id = spool.get("SPOOL_ID")
-
+            spool_id = (
+                coerce_spool_id(spool.get("SPOOL_ID")) or spool_id_of_resolution(resolved)
+            )
             if not spool_id:
                 self._retract_unresolved_lane(extruder, spool, spoolman_unanswered)
                 return
 
+            spool["SPOOL_ID"] = spool_id
             self._bind_resolved_spool(extruder, spool, spool_id)
 
         self.spoolman.resolve_spool(spool, on_resolve_spool)
