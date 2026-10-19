@@ -5,6 +5,9 @@ type next. "Spoolman has nothing for this tag" and "Spoolman never answered" are
 problems with two different remedies, so they never wear the same sentence: reporting an
 unreachable Spoolman as "no match" sends the user hunting for a spool that is already there.
 """
+import json
+
+from .card_uids import tag_uid
 from .filament_info import filament_info_from_spoolman, filament_info_to_string
 
 BIND_COMMAND = "SH_BIND_CARD_UID"
@@ -82,6 +85,17 @@ def applied_tag_message(channel, spool_id):
 def registration_problem_message(channel, problem, filament_info):
     material = (filament_info or {}).get("MAIN_TYPE") or "filament of that material"
     return REGISTRATION_PROBLEMS[problem].format(channel=channel, material=material)
+
+
+# The lane's own payload exactly as the reader stored it, beside what the helper made of it, so a
+# tag that resolved to nothing can be diagnosed without dumping the inventory it was matched
+# against.
+def unresolved_tag_evidence(channel, filament_info):
+    payload = json.dumps(filament_info, sort_keys=True, default=str)
+    interpreted = filament_info_to_string(filament_info, "debug")
+    uid = tag_uid(filament_info)
+    return (f"Unresolved tag on channel {channel}: payload={payload}; read as {interpreted}; "
+            f"card uid: {uid}")
 
 
 def spoolman_silent_message(channel, filament_info, level):

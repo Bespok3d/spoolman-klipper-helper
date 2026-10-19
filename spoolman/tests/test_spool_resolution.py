@@ -753,3 +753,59 @@ def test_the_connected_endpoint_is_the_one_the_moonraker_proxy_pushes():
         Path(__file__).resolve().parents[1] / "files" / "moonraker" / "spoolman_proxy.py"
     ).read_text()
     assert SPOOLMAN_CONNECTED_ENDPOINT in proxy_source
+
+
+# Debug output is what a user pastes into a bug report. The inventory a tag was matched against is
+# every spool they own, and burying the one lane being debugged under it is what these guard.
+INVENTORY_ONLY_SPOOL = {"id": 63, "comment": "a spool only the inventory knows about"}
+
+
+def test_debug_output_never_dumps_the_inventory_a_tag_was_matched_against():
+    logs = RecordingLogs()
+    inventory_server = {
+        **SPOOLMAN_SERVER,
+        ("/api/v1/spool", ""): [SKU_MATCHED_SPOOL, UID_BOUND_SPOOL, INVENTORY_ONLY_SPOOL],
+    }
+    resolved, requested = resolve_through_real_chain(
+        {**STOCK_SNAPMAKER_TAG, "CARD_UID": UNBOUND_UID_BYTES}, inventory_server, logs=logs)
+    assert resolved == [SKU_MATCHED_SPOOL]
+    assert ("/api/v1/spool", "") in requested
+    assert not any(INVENTORY_ONLY_SPOOL["comment"] in line for line in logs.lines)
+    assert any("3 records" in line for line in logs.lines)
+
+
+def test_an_unresolved_lane_logs_its_own_payload_and_what_was_read_from_it():
+    resolution, helper, _afc_pushes = build_resolution(resolve_result=None)
+    helper.holders.spool_holders[0] = {
+        **TAGGED, "SPOOL_ID": None, "CARD_UID": [0x04, 0xA1, 0xB2, 0xC3], "VENDOR_TAG": "x1"}
+    resolution.apply_spool_for_extruder(0)
+    evidence = [line for line in helper.logs.debug_lines if "Unresolved tag on channel 0" in line]
+    assert len(evidence) == 1
+    said = evidence[0]
+    assert '"ARGB_COLOR": "1D6C6AFF"' in said
+    assert '"CARD_UID": [4, 161, 178, 195]' in said
+    assert "#1D6C6A" in said
+    assert "VENDOR_TAG->x1" in said
+    assert "card uid: 04a1b2c3" in said
+
+
+def test_an_unanswered_lane_still_logs_its_own_payload():
+    resolution, helper, _afc_pushes = build_resolution(
+        resolve_result=None, spoolman_unanswered=True)
+    helper.holders.spool_holders[0] = {**TAGGED, "SPOOL_ID": None}
+    resolution.apply_spool_for_extruder(0)
+    assert any("Unresolved tag on channel 0" in line for line in helper.logs.debug_lines)
+
+
+def test_a_lane_with_no_tag_logs_no_tag_evidence():
+    resolution, helper, _afc_pushes = build_resolution(resolve_result=None)
+    untagged = {"VENDOR": "NONE", "MAIN_TYPE": "", "SPOOL_ID": None}
+    resolution._report_unresolved_tag(0, untagged, spoolman_unanswered=False)
+    assert not any("Unresolved tag" in line for line in helper.logs.lines)
+
+
+def test_a_resolved_lane_logs_no_tag_evidence():
+    resolution, helper, _afc_pushes = build_resolution(resolve_result=SPOOLMAN_SPOOL)
+    helper.holders.spool_holders[0] = {**TAGGED, "SPOOL_ID": None}
+    resolution.apply_spool_for_extruder(0)
+    assert not any("Unresolved tag" in line for line in helper.logs.lines)

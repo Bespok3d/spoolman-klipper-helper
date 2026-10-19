@@ -81,11 +81,16 @@ class FakePrinter:
 class RecordingLogs:
     def __init__(self):
         self.lines = []
+        self.debug_lines = []
 
     def _record(self, message):
         self.lines.append(message)
 
-    log = warn = error = verbose = debug = _record
+    def debug(self, message):
+        self.debug_lines.append(message)
+        self._record(message)
+
+    log = warn = error = verbose = _record
 
 
 def drain_timers(reactor):

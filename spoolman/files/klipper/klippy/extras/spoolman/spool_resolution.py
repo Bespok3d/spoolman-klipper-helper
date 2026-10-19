@@ -10,7 +10,7 @@ a spool of its own.
 """
 from .active_spool import coerce_spool_id
 from .afc import lane_spool_id
-from .card_uids import trackable_uid
+from .card_uids import tag_uid
 from .filament_info import filament_info_to_string, is_untagged_filament
 from .u1_tools import EXTRUDERS_COUNT
 from .unmatched_tag import (
@@ -20,6 +20,7 @@ from .unmatched_tag import (
     registration_problem_message,
     spoolman_silent_message,
     unmatched_tag_message,
+    unresolved_tag_evidence,
 )
 
 SPOOLMAN_CONNECTED_ENDPOINT = "spoolman_helper/spoolman_connected"
@@ -121,6 +122,7 @@ class SpoolResolution:
     def _report_unresolved_tag(self, channel, spool, spoolman_unanswered):
         if is_untagged_filament(spool):
             return
+        self.logs.debug(unresolved_tag_evidence(channel, spool))
         if spoolman_unanswered:
             self.logs.warn(spoolman_silent_message(channel, spool, self.helper.logging))
             return
@@ -282,7 +284,7 @@ class SpoolResolution:
             self.logs.error(f"Channel must be 0..{EXTRUDERS_COUNT - 1}")
             return
         tag = self.holders.spool_holders[channel]
-        uid = trackable_uid(tag.get("CARD_UID")) if tag else None
+        uid = tag_uid(tag) if tag else None
         if not uid:
             self.logs.warn(f"No stable tag UID on channel {channel} to bind to spool {spool_id}")
             return

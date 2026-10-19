@@ -40,6 +40,14 @@ def filaments_with_exact_article_number(filaments, sku):
             if str(filament.get("article_number", "")).strip() == tag_article_number]
 
 
+# A list answer is usually the whole inventory, which buries the one lane being debugged under
+# every spool the user owns, so only its size is logged.
+def response_summary(payload):
+    if isinstance(payload, list):
+        return f"{len(payload)} records"
+    return json.dumps(payload)
+
+
 class Spoolman:
     # `options` is the [spoolman_helper] section. A bench passing none gets the shipped defaults.
     def __init__(self, printer, logs, options=None):
@@ -193,7 +201,7 @@ class Spoolman:
                 self.logs.verbose(f"Spoolman refused a spool for the tag: {error}")
                 on_registered(None, REGISTER_REFUSED)
                 return
-            self.bind_uid(spool_id, card_uids.trackable_uid(filament_info.get("CARD_UID")))
+            self.bind_uid(spool_id, card_uids.tag_uid(filament_info))
             on_registered(spool_id, None, spool)
 
         SpoolmanRequest(self.webhooks, self.logs, on_created).fetch(
@@ -228,7 +236,7 @@ class Spoolman:
             if error:
                 on_applied(REGISTER_REFUSED)
                 return
-            self.bind_uid(spool_id, card_uids.trackable_uid(filament_info.get("CARD_UID")))
+            self.bind_uid(spool_id, card_uids.tag_uid(filament_info))
             on_applied(None)
 
         SpoolmanRequest(self.webhooks, self.logs, on_patched).fetch(
@@ -246,12 +254,7 @@ class Spoolman:
     def lookup_spoolman(self, sku, callback):
         self.logs.verbose(f"Looking up {sku}")
 
-        def on_spool_result(error, spools):
-            self.logs.debug(f"SPOOL RESULT -> {spools}")
-            callback(error, spools)
-
         def on_filament_result(error, filaments):
-            self.logs.debug(f"FILAMENT RESULT -> {filaments}")
             if error:
                 self.logs.error(f"filament lookup error for sku {sku}: {json.dumps(error)}")
                 callback(f"filaments error for sku {sku}", filaments)
@@ -264,7 +267,7 @@ class Spoolman:
                 callback(None, [])  # a clean "no such filament", never a Spoolman failure
                 return
             filament_id = exact_filaments[0]["id"]
-            spool_request = SpoolmanRequest(self.webhooks, self.logs, on_spool_result)
+            spool_request = SpoolmanRequest(self.webhooks, self.logs, callback)
             spool_request.fetch("/api/v1/spool", f"filament.id={filament_id}")
 
         filament_request = SpoolmanRequest(self.webhooks, self.logs, on_filament_result)
@@ -274,7 +277,7 @@ class Spoolman:
     # went unanswered along the way, because a lane the user must go and fix in Spoolman and a
     # lane that failed because Spoolman is down are two different problems to report.
     def resolve_spool(self, info, callback):
-        uid = card_uids.trackable_uid(info.get("CARD_UID"))
+        uid = card_uids.tag_uid(info)
         self.logs.verbose(
             f"Resolving spool: vendor->{info.get('VENDOR')}, sku->{info.get('SKU')}, "
             f"spool_id->{info.get('SPOOL_ID')}, uid->{uid}, chain->{self.strategy_chain}"
@@ -504,7 +507,7 @@ class SpoolmanRequest:
         payload = params.get("payload")
         error = params.get("error")
         self.logs.debug(
-            f"_on_result id={self.request_id} payload={json.dumps(payload)} error={error}"
+            f"_on_result id={self.request_id} payload={response_summary(payload)} error={error}"
         )
         if self.callback:
             try:

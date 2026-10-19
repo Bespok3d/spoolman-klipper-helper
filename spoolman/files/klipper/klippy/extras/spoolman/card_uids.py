@@ -71,6 +71,11 @@ def trackable_uid(card_uid):
     return normalize_uid(card_uid)
 
 
+def tag_uid(filament_info):
+    """The trackable UID of the tag a lane reader stored."""
+    return trackable_uid(filament_info.get("CARD_UID"))
+
+
 def parse_write_form(text, default=DEFAULT_WRITE_FORM):
     """Validate the configured write form, falling back to the default on anything unknown."""
     name = str(text or "").strip().lower()

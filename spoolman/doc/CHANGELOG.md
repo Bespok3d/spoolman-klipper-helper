@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.1.37
+
+- Fix: debug logging no longer prints your whole Spoolman inventory every time a lane is looked up.
+  Before, each lookup wrote every spool and every filament you own into the log, which buried the
+  one lane you were trying to debug. The log now says how many records came back instead.
+- Fix: a tag that ends up with no spool, because nothing matched or Spoolman did not answer, now
+  leaves its evidence in the debug log. Before, all you saw was that nothing matched. The log now
+  shows, for that lane only, the tag data exactly as the reader stored it, how the helper read it
+  (brand, material, color) and its card UID.
+
 ## 0.1.36
 
 - Fix: lanes read at power-on while Spoolman was still unreachable used to stay unassigned until

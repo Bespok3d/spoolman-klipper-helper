@@ -5,7 +5,7 @@ Spoolman spool) is labelled UNKNOWN here rather than the firmware's raw "NONE": 
 unidentified, not absent. This naming lives ONLY in our logs/labels; the firmware's
 print_task_config keeps "NONE" as its own sentinel for "not edited", which it relies on.
 """
-from .card_uids import trackable_uid
+from .card_uids import tag_uid
 
 UNKNOWN_DESCRIPTOR = "UNKNOWN"
 UNTAGGED_VENDORS = ("NONE", "Generic")
@@ -126,7 +126,7 @@ def _summary(filament_info):
 # (SH_BIND_CARD_UID) without digging it out of the firmware. Says nothing for a tag with no UID,
 # or a re-randomized one, since neither can be bound.
 def _card_uid_clause(filament_info):
-    card_uid = trackable_uid(filament_info.get("CARD_UID"))
+    card_uid = tag_uid(filament_info)
     if not card_uid:
         return ""
     return f", card uid: {card_uid}"
