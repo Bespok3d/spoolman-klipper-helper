@@ -10,11 +10,13 @@
   with four colours is no longer flattened by a tag that holds one.
 - Fix: a filament whose only colour sits in Spoolman's colour list, with no single colour set,
   now reaches the printer with that colour instead of none.
-- Note: the printer's colour mode for multi colour spools is always sent as its default, because
+- The printer's colour mode for multi colour spools is always left at its default for now, because
   what the other modes mean is not known yet.
-
-## 0.1.39
-
+- A filament with Starlight or Rainbow in its name now gets that sub-type on the printer. Both are
+  sub-types the Snapmaker firmware 2.1 knows.
+- Fix: a spool with an OpenSpool tag that has no spool number written on it now links to the
+  right spool in Spoolman. Before, the helper found the spool by its tag, then asked Spoolman for
+  spool 0, which does not exist, so filament use was never recorded. Thanks to d-reddi.
 - Fix: when two of your Spoolman filaments have the same article number, a tag with that number no
   longer gets a new spool made under the first of them. The spool stays untracked and the console
   says why, so you can keep that article number on one filament only.
@@ -49,15 +51,6 @@
 - Fix: a tag already tied to one of your spools is no longer written onto another spool you
   picked, and no new spool is made from it by hand. The tag stays on its spool and the console
   says so. To move it, clear that spool's `card_uids` field in Spoolman first.
-
-## 0.1.38
-
-- Fix: a spool with an OpenSpool tag that has no spool number written on it now links to the
-  right spool in Spoolman. Before, the helper found the spool by its tag, then asked Spoolman for
-  spool 0, which does not exist, so filament use was never recorded. Thanks to d-reddi.
-
-## 0.1.37
-
 - Fix: debug logging no longer prints your whole Spoolman inventory every time a lane is looked up.
   Before, each lookup wrote every spool and every filament you own into the log, which buried the
   one lane you were trying to debug. The log now says how many records came back instead.
