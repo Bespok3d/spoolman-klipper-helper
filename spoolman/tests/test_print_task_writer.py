@@ -250,6 +250,17 @@ def test_any_shore_hardness_grade_in_the_name_files_as_the_subtype():
     assert subtype_of("TPU 3D Blue") == "Basic"  # a marketing "3D" is not a grade
 
 
+def test_the_firmware_2_1_starlight_and_rainbow_lines_file_as_their_subtype():
+    # Firmware 2.1 added these sub-types to its filament table; a name carrying one must not
+    # fall back to Basic.
+    def subtype_of(filament_name):
+        return filament_config_args_from_spool(tpu_spool_named(filament_name), 0)[
+            "FILAMENT_SUBTYPE"]
+
+    assert subtype_of("PLA Starlight Black") == "Starlight"
+    assert subtype_of("rainbow PLA") == "Rainbow"
+
+
 def test_a_two_word_subtype_is_matched_as_a_phrase():
     args = filament_config_args_from_spool(FULL_SPECTRUM_SPOOL, 0)
     assert args["FILAMENT_SUBTYPE"] == "Full Spectrum"

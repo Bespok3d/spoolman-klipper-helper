@@ -250,10 +250,11 @@ slicer:
 - `SH_APPLY_TAG_TO_SPOOL CHANNEL={0..3} SPOOL=<id>` writes what the lane's tag says onto a Spoolman
   spool you picked (brand, material, sub-type, colour, article number) and binds the tag to it. The
   lane starts reporting that spool straight away. If another filament already has the tag's article
-  number, nothing is written and the console says so.
+  number, or the tag is already tied to another spool, nothing is written and the console says so.
 - `SH_ADD_SPOOL_FROM_TAG CHANNEL={0..3}` creates a new Spoolman spool from what the lane's tag says,
   binds the tag to it and puts the lane on it. Asking for one by hand works whether or not
-  **Create spools from tags** is on.
+  **Create spools from tags** is on. A tag already tied to another spool makes no new spool: the
+  console says so.
 - `CLEAR_ACTIVE_SPOOL` clears the current active spool.
 - `CLEAR_ALL_SPOOLS` clears the selected spool for every tool, including RFID-tagged lanes.
 - `DETECT_SPOOLS` re-detects every loaded spool. It is the last line of defence when something did not

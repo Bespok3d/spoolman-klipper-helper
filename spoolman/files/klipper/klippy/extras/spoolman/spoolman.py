@@ -25,6 +25,7 @@ from .unmatched_tag import (
     REGISTER_DISABLED,
     REGISTER_REFUSED,
     REGISTER_SHARED_ARTICLE_NUMBER,
+    REGISTER_TAG_ON_ANOTHER_SPOOL,
     REGISTER_UNMEASURED_MATERIAL,
     REGISTER_UNREACHABLE,
 )
@@ -137,10 +138,25 @@ class Spoolman:
             on_registered(None, REGISTER_DISABLED)
             return
 
+        def on_spools(error, spools):
+            if error:
+                self._say_registration_unanswered(error, on_registered)
+                return
+            if self._tag_tied_to_another_spool(filament_info, spools or [], None):
+                on_registered(None, REGISTER_TAG_ON_ANOTHER_SPOOL)
+                return
+            self._register_untied_tag(filament_info, on_registered)
+
+        self._fetch_all_spools(on_spools)
+
+    def _say_registration_unanswered(self, error, on_registered):
+        self.logs.verbose(f"Cannot register the tag, Spoolman was silent: {error}")
+        on_registered(None, REGISTER_UNREACHABLE)
+
+    def _register_untied_tag(self, filament_info, on_registered):
         def on_filaments(error, filaments):
             if error:
-                self.logs.verbose(f"Cannot register the tag, Spoolman was silent: {error}")
-                on_registered(None, REGISTER_UNREACHABLE)
+                self._say_registration_unanswered(error, on_registered)
                 return
             self._spool_for_tag(filament_info, filaments or [], on_registered)
 
@@ -233,6 +249,9 @@ class Spoolman:
         if not filament_id:
             self.logs.verbose(f"Spool {spool_id} is not one of theirs, or carries no filament")
             on_applied(REGISTER_REFUSED)
+            return
+        if self._tag_tied_to_another_spool(filament_info, spools, spool_id):
+            on_applied(REGISTER_TAG_ON_ANOTHER_SPOOL)
             return
 
         def on_filaments(error, filaments):
@@ -373,9 +392,28 @@ class Spoolman:
             f"Spools {spool_id} and {owner.get('id')} are the two sides of one reel: archive the "
             "one you do not keep in Spoolman, and the other takes both sides on the next read")
 
-    # A bind in flight is not in the spools in hand yet, but the UID is already taken.
     def _claimed_for_another_spool(self, uids, spool_id):
-        return any(self._claims_awaiting_bind.get(uid, spool_id) != spool_id for uid in uids)
+        return self._claim_of_another_spool(uids, spool_id) is not None
+
+    # A bind in flight is not in the spools in hand yet, but the UID is already taken.
+    def _claim_of_another_spool(self, uids, spool_id):
+        return next(((uid, self._claims_awaiting_bind[uid]) for uid in uids
+                     if self._claims_awaiting_bind.get(uid, spool_id) != spool_id), None)
+
+    # A tag tied to one spool, written onto or made into another, would leave one reel on two
+    # spools. `spool_id` is the spool it goes onto, None for a spool still to be made.
+    def _tag_tied_to_another_spool(self, filament_info, spools, spool_id):
+        uids = card_uids.binding_uids(filament_info)
+        conflict = card_uids.uid_bound_elsewhere(spools, uids, spool_id)
+        tie = ((conflict[0], conflict[1].get("id")) if conflict
+               else self._claim_of_another_spool(uids, spool_id))
+        if tie is None:
+            return False
+        self._say_uid_assigned(*tie)
+        return True
+
+    def _say_uid_assigned(self, uid, owner_spool_id):
+        self.logs.log(f"UID {uid} already assigned to spool {owner_spool_id}, not re-binding")
 
     def _resolve_by_sku(self, info, uids, callback, advance):
         sku = info.get("SKU")
@@ -579,12 +617,28 @@ class Spoolman:
         conflict = card_uids.uid_bound_elsewhere(spools, uids, spool_id)
         if conflict is not None:
             conflicting_uid, owner = conflict
-            self.logs.log(f"UID {conflicting_uid} already assigned to spool {owner.get('id')}, "
-                          "not re-binding")
+            self._say_uid_assigned(conflicting_uid, owner.get("id"))
             if on_done:
                 on_done(False)
             return
-        target = card_uids.find_spool_by_id(spools, spool_id) or {}
+        target = card_uids.find_spool_by_id(spools, spool_id)
+        if target is None:
+            self._bind_spool_left_out_of_inventory(spool_id, uids, on_done)
+            return
+        self._bind_missing_uids(spool_id, uids, target, on_done)
+
+    # The inventory leaves archived spools out, and Spoolman replaces the whole extra on a PATCH,
+    # so such a spool is read on its own: merging onto nothing would wipe its other extra fields.
+    def _bind_spool_left_out_of_inventory(self, spool_id, uids, on_done):
+        def on_spool(error, spool):
+            if error or not spool:
+                self._report_failed_bind(spool_id, error or "Spoolman sent no spool", on_done)
+                return
+            self._bind_missing_uids(spool_id, uids, spool, on_done)
+
+        SpoolmanRequest(self.webhooks, self.logs, on_spool).fetch(f"/api/v1/spool/{spool_id}", "")
+
+    def _bind_missing_uids(self, spool_id, uids, target, on_done):
         missing_uids = card_uids.uids_missing_from_spool(target, uids)
         if not missing_uids:
             self.logs.debug(f"UID {', '.join(uids)} already bound to spool {spool_id}")
