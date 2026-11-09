@@ -86,7 +86,9 @@ match wins. By default that order is `spool_id, uid, sku`:
 - **uid**: the tag's hardware UID, bound to a spool in Spoolman. This is how a tag the printer
   cannot fully decode still gets tracked: once its UID is bound to a spool, every later tap
   resolves straight to that spool.
-- **sku**: the tag's SKU matched against a filament's **Article Number** in Spoolman.
+- **sku**: the tag's SKU matched against a filament's **Article Number** in Spoolman. Letter case
+  does not matter, but the whole number must match, and only one filament may carry it: when two
+  filaments share it, the tag matches neither and the spool stays untracked.
 
 You can change the order with the **Spool resolution order** setting. A bound UID is stored on the
 Spoolman spool in a `card_uids` field (a list, since a spool can carry two tags). That is the same
@@ -101,7 +103,9 @@ additive and de-duplicated, and a spool's other fields are preserved. Re-randomi
 
 - **Auto-bind** (off by default): turn on **Auto-bind tag UID on SKU match** and the first time a
   spool is resolved by SKU its current tag UID is written onto that spool, so the next tap is a
-  direct UID match. With it off, UIDs are only ever bound when you ask.
+  direct UID match. This happens only while none of that filament's spools has a tag yet: a new tag
+  after that could be the other side of a spool or a second roll, so bind it by hand. With it off,
+  UIDs are only ever bound when you ask.
 - **Manual bind:** run `SH_BIND_CARD_UID CHANNEL={0..3} SPOOL=<id>` to bind the tag currently on a
   lane to a specific Spoolman spool. Handy to recover from a miss, or to register a tag up front.
 
@@ -259,8 +263,8 @@ slicer:
 - **Log level** (`error` < `info` < `warn` < `verbose` < `debug`): how chatty the logs are.
 - **Spool resolution order** (default `spool_id,uid,sku`): the identity chain used to match a tag
   to a Spoolman spool, first match wins. See [Identifying spools by tag](#identifying-spools-by-tag).
-- **Auto-bind tag UID on SKU match** (off by default): when a spool is found by SKU and has no UID
-  yet, write the current tag's UID onto it so the next tap is a direct match.
+- **Auto-bind tag UID on SKU match** (off by default): when a spool is found by SKU and no spool of
+  that filament has a UID yet, write the current tag's UID onto it so the next tap is a direct match.
 - **Make a spool out of a tag Spoolman does not have** (`register_from_tag`, on by default): when a
   tag matches nothing and none of your spools came close, create it in Spoolman from what the card
   carries and bind the card to it. It also covers writing a card onto a spool you picked

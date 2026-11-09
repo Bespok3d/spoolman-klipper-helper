@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.1.39
+
+- Fix: when two of your Spoolman filaments have the same article number, a tag with that number no
+  longer gets a new spool made under the first of them. The spool stays untracked and the console
+  says why, so you can keep that article number on one filament only.
+- Fix: a tag is now found by its article number whatever the letter case. Before, `sm-pla` on the
+  tag missed a filament saved as `SM-PLA`, while making a new spool already ignored the case.
+- Fix: with auto-bind on, the tag of a second roll of the same filament is no longer written onto
+  the first roll's spool for good. A tag is now written onto a spool only while none of that
+  filament's spools has a tag yet. Bind any later tag by hand.
+
 ## 0.1.38
 
 - Fix: a spool with an OpenSpool tag that has no spool number written on it now links to the

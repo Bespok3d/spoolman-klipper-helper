@@ -4,6 +4,7 @@ import json
 import types
 from pathlib import Path
 
+import pytest
 from klipper_fakes import (
     FakePrinter,
     RecordingLogs,
@@ -747,6 +748,31 @@ def test_one_exact_article_number_still_resolves_and_registers_the_card():
     assert resolved == [SKU_MATCHED_SPOOL]
     assert ("/api/v1/spool", "filament.id=9") in requested
     assert ("/api/v1/spool/31", "") in requested
+
+
+def test_an_article_number_written_in_another_letter_case_still_resolves():
+    upper_case_filament = [{"id": 9, "article_number": SNAPMAKER_SKU.upper()}]
+    resolved, _requested = resolve_through_real_chain(
+        {**STOCK_SNAPMAKER_TAG, "CARD_UID": UNBOUND_UID_BYTES},
+        {**SPOOLMAN_SERVER,
+         ("/api/v1/filament", f"article_number={SNAPMAKER_SKU}"): upper_case_filament})
+    assert resolved == [SKU_MATCHED_SPOOL]
+
+
+SECOND_ROLL_SPOOL = {"id": 32}
+
+
+@pytest.mark.parametrize("filament_spools", [
+    [UID_BOUND_SPOOL, SECOND_ROLL_SPOOL],
+    [SECOND_ROLL_SPOOL, UID_BOUND_SPOOL],
+])
+def test_auto_bind_never_ties_a_new_tag_to_a_filament_whose_spools_already_carry_one(
+        filament_spools):
+    _resolved, requested = resolve_through_real_chain(
+        {**STOCK_SNAPMAKER_TAG, "CARD_UID": UNBOUND_UID_BYTES},
+        {**SPOOLMAN_SERVER, ("/api/v1/spool", "filament.id=9"): filament_spools},
+        card_uids_auto_register=True)
+    assert not [request for request in requested if request[0].startswith("/api/v1/spool/")]
 
 
 def test_a_spool_id_on_the_tag_still_wins_over_both():

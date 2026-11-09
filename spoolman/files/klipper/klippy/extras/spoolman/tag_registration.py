@@ -22,15 +22,27 @@ def _same_text(on_tag, in_spoolman):
     return _comparable(on_tag) == _comparable(in_spoolman)
 
 
+# The one rule for which filaments a tag's SKU names, shared by the lookup and by registration so
+# the two never disagree: the whole article number, in any letter case, because Spoolman's own
+# filter ignores case but also matches any article number that merely contains the SKU.
+def filaments_with_exact_article_number(filaments, sku):
+    if not _comparable(sku):
+        return []
+    return [filament for filament in filaments if _same_text(sku, filament.get("article_number"))]
+
+
+# Two filaments under one article number leave the tag naming neither, so it is matched to none.
+def article_number_is_shared(tag_info, filaments):
+    return len(filaments_with_exact_article_number(filaments, tag_info.get("SKU"))) > 1
+
+
 # The tag may already be a filament they own: their own article number is the strongest word on
 # that, and a vendor, material, name and colour that all agree is the next strongest. Either way
 # the new spool hangs off the record they already curate instead of a duplicate of it.
 def matching_filament(tag_info, filaments):
-    by_article_number = [filament for filament in filaments
-                         if _comparable(tag_info.get("SKU"))
-                         and _same_text(tag_info.get("SKU"), filament.get("article_number"))]
+    by_article_number = filaments_with_exact_article_number(filaments, tag_info.get("SKU"))
     if by_article_number:
-        return by_article_number[0]
+        return by_article_number[0] if len(by_article_number) == 1 else None
     described = [filament for filament in filaments if _describes_same_filament(tag_info, filament)]
     return described[0] if described else None
 

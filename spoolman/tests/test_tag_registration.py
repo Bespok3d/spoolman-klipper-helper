@@ -22,8 +22,10 @@ from spoolman.tag_registration import (
 from spoolman.unmatched_tag import (
     REGISTER_DISABLED,
     REGISTER_REFUSED,
+    REGISTER_SHARED_ARTICLE_NUMBER,
     REGISTER_UNMEASURED_MATERIAL,
     REGISTER_UNREACHABLE,
+    registration_problem_message,
 )
 from test_spool_resolution import FakeWebRequest, SpoolmanServerWebhooks
 
@@ -49,6 +51,12 @@ def test_a_filament_they_already_own_is_used_instead_of_a_second_copy_of_it():
 def test_a_filament_that_merely_shares_a_blank_article_number_is_not_the_tag():
     other_material = filament(id=9, material="PETG", article_number="")
     assert matching_filament({"MAIN_TYPE": "", "SKU": ""}, [other_material]) is None
+
+
+def test_two_filaments_sharing_the_tags_article_number_are_neither_of_them_the_tag():
+    twins = [filament(id=12, article_number="EL-PLA-M-TEAL"),
+             filament(id=13, article_number="el-pla-m-teal")]
+    assert matching_filament(TAG, twins) is None
 
 
 def test_the_same_filament_under_another_article_number_is_still_recognised():
@@ -171,6 +179,16 @@ def test_a_tag_that_is_already_one_of_their_filaments_only_gets_a_spool():
         ("/api/v1/spool", {"filament_id": 12}),
     ]
     assert outcomes == [(901, None)]
+
+
+def test_a_tag_whose_article_number_two_filaments_share_creates_nothing_and_says_why():
+    shared = {("/api/v1/filament", ""): [filament(id=12, article_number="EL-PLA-M-TEAL"),
+                                         filament(id=13, article_number="EL-PLA-M-TEAL")],
+              ("/api/v1/spool", ""): []}
+    outcomes, webhooks = register_tag(inventory=shared)
+    assert webhooks.written == []
+    assert outcomes == [(None, REGISTER_SHARED_ARTICLE_NUMBER)]
+    assert "channel 2" in registration_problem_message(2, REGISTER_SHARED_ARTICLE_NUMBER, TAG)
 
 
 def test_a_material_they_have_never_bought_creates_nothing_and_says_what_is_missing():

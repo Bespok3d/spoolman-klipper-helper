@@ -8,9 +8,11 @@ from . import card_uids
 from .helper_options import HelperOptions
 from .spool_candidates import candidate_spools
 from .tag_registration import (
+    article_number_is_shared,
     card_details_payload,
     dimensions_of_material,
     filament_payload,
+    filaments_with_exact_article_number,
     matching_filament,
     spool_payload,
     vendor_id_named,
@@ -19,6 +21,7 @@ from .tag_registration import (
 from .unmatched_tag import (
     REGISTER_DISABLED,
     REGISTER_REFUSED,
+    REGISTER_SHARED_ARTICLE_NUMBER,
     REGISTER_UNMEASURED_MATERIAL,
     REGISTER_UNREACHABLE,
 )
@@ -29,15 +32,6 @@ RETRY_DELAY_STEP_SECONDS = 1.0
 MAX_REMOTE_METHOD_RETRIES = 10
 EMPTY_SPOOL_IDS = (0, "0", "", None)
 SPOOLMAN_SILENT_ERROR = "Spoolman did not answer"
-
-
-# Spoolman matches `article_number` as a SUBSTRING, so a short SKU like "2" comes back carrying
-# every filament whose article number merely contains it. Only an exact article number is this
-# tag's filament.
-def filaments_with_exact_article_number(filaments, sku):
-    tag_article_number = str(sku).strip()
-    return [filament for filament in filaments
-            if str(filament.get("article_number", "")).strip() == tag_article_number]
 
 
 # A list answer is usually the whole inventory, which buries the one lane being debugged under
@@ -147,6 +141,9 @@ class Spoolman:
         SpoolmanRequest(self.webhooks, self.logs, on_filaments).fetch("/api/v1/filament", "")
 
     def _spool_for_tag(self, filament_info, filaments, on_registered):
+        if article_number_is_shared(filament_info, filaments):
+            on_registered(None, REGISTER_SHARED_ARTICLE_NUMBER)
+            return
         already_theirs = matching_filament(filament_info, filaments)
         if already_theirs:
             self._create_spool(filament_info, already_theirs.get("id"), on_registered)
@@ -342,15 +339,22 @@ class Spoolman:
                 advance(unanswered=bool(error))
                 return
             self.logs.debug(f"Resolved by sku->{sku}: spool {spools[0].get('id')}")
-            self._auto_register_uid(spools[0], uid)
+            self._auto_register_uid(spools, uid)
             callback(spools[0], False)
 
         self.lookup_spoolman(sku, on_lookup)
 
-    def _auto_register_uid(self, spool, uid):
-        if not (self.auto_register and uid) or card_uids.spool_has_card_uid(spool, uid):
+    # Once any spool of this filament carries a tag, a new tag could be that spool's other side or
+    # another roll of the same filament, and nothing tells the two apart. Binding it to the first
+    # spool would tie a second roll to the first roll for good, so only a filament none of whose
+    # spools carries a tag yet gets the tag written on.
+    def _auto_register_uid(self, filament_spools, uid):
+        if not (self.auto_register and uid):
             return
-        spool_id = spool.get("id")
+        if any(card_uids.spool_card_uids(spool) for spool in filament_spools):
+            self.logs.verbose(f"Not auto-binding UID {uid}: a spool of this filament has a tag")
+            return
+        spool_id = filament_spools[0].get("id")
         if spool_id:
             self.bind_uid(spool_id, uid)
 

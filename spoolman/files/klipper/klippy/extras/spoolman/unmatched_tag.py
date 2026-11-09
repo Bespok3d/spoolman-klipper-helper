@@ -58,6 +58,7 @@ REGISTER_UNREACHABLE = "unreachable"
 REGISTER_UNMEASURED_MATERIAL = "unmeasured-material"
 REGISTER_REFUSED = "refused"
 REGISTER_DISABLED = "disabled"
+REGISTER_SHARED_ARTICLE_NUMBER = "shared-article-number"
 
 REGISTRATION_PROBLEMS = {
     REGISTER_UNREACHABLE:
@@ -67,6 +68,10 @@ REGISTRATION_PROBLEMS = {
     REGISTER_DISABLED:
         "Creating and updating spools from a tag is switched off, so the tag on channel {channel} "
         "was left alone (register_from_tag in [spoolman_helper])",
+    REGISTER_SHARED_ARTICLE_NUMBER:
+        "More than one of your Spoolman filaments has the article number of the tag on channel "
+        "{channel}, so no spool was made for it. Keep that article number on one filament only, "
+        "then re-insert the spool",
     REGISTER_UNMEASURED_MATERIAL:
         "You have no {material} in Spoolman to copy a diameter and a density from, so the tag on "
         "channel {channel} was not registered. Add one {material} spool in Spoolman, then "
