@@ -192,12 +192,16 @@ class SpoolResolution:
     # for it again left the lane unnamed until that answer arrived. A lane resolved any other
     # way still has to ask.
     def _apply_spoolman_to_the_lane(self, extruder, spool_id, new_spool=None):
-        if new_spool and self.writer.apply_spool(extruder, new_spool):
+        if new_spool and self.writer.apply_spool(
+            extruder, new_spool, self.holders.tag_on_lane(extruder)
+        ):
             return
 
         def on_spool(spoolman_spool, target_extruder=extruder):
             if spoolman_spool:
-                self.writer.apply_spool(target_extruder, spoolman_spool)
+                self.writer.apply_spool(
+                    target_extruder, spoolman_spool, self.holders.tag_on_lane(target_extruder)
+                )
 
         self.spoolman.fetch_spool(spool_id, on_spool)
 

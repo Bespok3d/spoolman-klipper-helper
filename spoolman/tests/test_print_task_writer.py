@@ -450,3 +450,121 @@ def test_config_already_matches():
     assert config_already_matches(task, 3, filament_config_clear_args(3)) is True
     assert config_already_matches(
         task, 3, filament_config_args_from_spool(SPOOL, 3)) is False
+
+
+# Spool 89 on junior: a coaxial PLA Spoolman files with four colours and no color_hex at all.
+MULTI_COLOUR_SPOOL = {
+    "id": 89,
+    "filament": {
+        "name": "PLA Silk Coaxial",
+        "material": "PLA",
+        "multi_color_hexes": "30d68b,E736D4,A8C70C,CC580A",
+        "vendor": {"name": "Eryone"},
+    },
+}
+
+MULTI_COLOUR_ARGS = (
+    "COLOR_NUMS=4 COLORS=30D68B,E736D4,A8C70C,CC580A MULTI_MODE=0 ALPHA=255"
+)
+
+TAG_THREE_COLOURS = {
+    "VENDOR": "Snapmaker", "MAIN_TYPE": "PLA", "SUB_TYPE": "Silk", "SPOOL_ID": 42,
+    "COLOR_NUMS": 3, "ALPHA": 255, "MULTI_MODE": 1,
+    "RGB_1": 0x112233, "RGB_2": 0x445566, "RGB_3": 0x778899, "RGB_4": 0xFFFFFF, "RGB_5": 0xFFFFFF,
+    "ARGB_COLOR": 0xFF112233,
+}
+
+TAG_ONE_COLOUR_ON_SPOOL_89 = {
+    "VENDOR": "Snapmaker", "MAIN_TYPE": "PLA", "SUB_TYPE": "Silk", "SPOOL_ID": 89,
+    "COLOR_NUMS": 1, "ALPHA": 255, "MULTI_MODE": 0,
+    "RGB_1": 0xFFFFFF, "RGB_2": 0xFFFFFF, "RGB_3": 0xFFFFFF, "RGB_4": 0xFFFFFF, "RGB_5": 0xFFFFFF,
+    "ARGB_COLOR": 0xFFFFFFFF,
+}
+
+
+def test_a_multi_colour_spool_is_written_with_all_its_colours():
+    # Before, a spool with no color_hex was written with no colour, and the lane kept white.
+    writer, macros = build_writer(empty_task_config())
+    writer.apply_spool(3, MULTI_COLOUR_SPOOL)
+    assert macros.commands[0] == (
+        'SET_PRINT_FILAMENT_CONFIG CONFIG_EXTRUDER=3 VENDOR="Eryone" FILAMENT_TYPE="PLA" '
+        f'FILAMENT_SUBTYPE="Silk" {MULTI_COLOUR_ARGS}'
+    )
+
+
+def test_tag_single_colour_does_not_flatten_spoolman_multi_colours():
+    task = empty_task_config()
+    task["filament_official"][3] = True
+    writer, macros = build_writer(task, spoolman_overrides_tag=True)
+    writer.apply_spool(3, MULTI_COLOUR_SPOOL, TAG_ONE_COLOUR_ON_SPOOL_89)
+    assert macros.commands[0].endswith(MULTI_COLOUR_ARGS)
+
+
+def test_tag_multi_colours_are_not_flattened_by_a_spoolman_single_colour():
+    task = empty_task_config()
+    task["filament_official"][3] = True
+    writer, macros = build_writer(task, spoolman_overrides_tag=True)
+    writer.apply_spool(3, SPOOL, TAG_THREE_COLOURS)
+    assert macros.commands[0].endswith(
+        "COLOR_NUMS=3 COLORS=112233,445566,778899 MULTI_MODE=0 ALPHA=255"
+    )
+    assert "FILAMENT_COLOR_RGBA" not in macros.commands[0]
+
+
+def test_a_tag_naming_another_spool_does_not_lend_its_colours():
+    other_spool_tag = {**TAG_THREE_COLOURS, "SPOOL_ID": 7}
+    writer, macros = build_writer(empty_task_config())
+    writer.apply_spool(3, SPOOL, other_spool_tag)
+    assert macros.commands[0].endswith("FILAMENT_COLOR_RGBA=3FD2C5FF")
+
+
+def test_more_colours_than_the_firmware_holds_are_capped_at_five():
+    six_colours = {
+        **MULTI_COLOUR_SPOOL,
+        "filament": {
+            **MULTI_COLOUR_SPOOL["filament"],
+            "multi_color_hexes": "111111,222222,333333,444444,555555,666666",
+        },
+    }
+    args = filament_config_args_from_spool(six_colours, 3)
+    assert args["COLOR_NUMS"] == "5"
+    assert args["COLORS"] == "111111,222222,333333,444444,555555"
+
+
+def multi_colour_task_config(colours, alpha=255):
+    task = empty_task_config()
+    task["filament_vendor"][3] = "Eryone"
+    task["filament_type"][3] = "PLA"
+    task["filament_sub_type"][3] = "Silk"
+    task["filament_color_rgba"][3] = f"{colours[0]}{alpha:02X}"
+    task["filament_color_multi"] = [
+        {"nums": 1, "alpha": 255, "mode": 0, "colors": ["FFFFFF"]} for _ in range(4)
+    ]
+    padded = colours + ["FFFFFF"] * (5 - len(colours))
+    task["filament_color_multi"][3] = {
+        "nums": len(colours), "alpha": alpha, "mode": 0, "colors": padded,
+    }
+    return task
+
+
+def test_a_lane_already_holding_the_multi_colours_is_not_rewritten():
+    task = multi_colour_task_config(["30D68B", "E736D4", "A8C70C", "CC580A"])
+    writer, macros = build_writer(task)
+    writer.apply_spool(3, MULTI_COLOUR_SPOOL)
+    assert config_writes_sent(macros) == []
+
+
+def test_a_lane_holding_other_multi_colours_is_rewritten():
+    task = multi_colour_task_config(["30D68B", "E736D4"])
+    writer, macros = build_writer(task)
+    writer.apply_spool(3, MULTI_COLOUR_SPOOL)
+    assert len(config_writes_sent(macros)) == 1
+
+
+def test_a_single_colour_matching_only_the_first_of_several_is_rewritten():
+    task = multi_colour_task_config(["3FD2C5", "E736D4"])
+    task["filament_vendor"][3] = "FlashForge"
+    task["filament_sub_type"][3] = "Basic"
+    writer, macros = build_writer(task)
+    writer.apply_spool(3, SPOOL)
+    assert config_writes_sent(macros) == [EXPECTED_GCODE]

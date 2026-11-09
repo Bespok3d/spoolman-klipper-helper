@@ -201,7 +201,9 @@ class SpoolTracking:
         def on_spool(spool, target_extruder=extruder, picked=spool_id):
             if spool:
                 self.helper.spools_by_id.setdefault(picked, filament_info_from_spoolman(spool))
-                self.writer.apply_spool(target_extruder, spool)
+                self.writer.apply_spool(
+                    target_extruder, spool, self.helper.tag_on_lane(target_extruder)
+                )
 
         self.spoolman.fetch_spool(spool_id, on_spool)
 

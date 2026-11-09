@@ -73,9 +73,12 @@ class SpoolHolders:
         if 0 <= channel < EXTRUDERS_COUNT:
             self.spool_holders[channel] = None
 
-    def lane_is_tagged(self, channel):
+    def tag_on_lane(self, channel):
         holder = self.spool_holders[channel] if 0 <= channel < EXTRUDERS_COUNT else None
-        return bool(holder) and not is_untagged_filament(holder)
+        return None if is_untagged_filament(holder) else holder
+
+    def lane_is_tagged(self, channel):
+        return self.tag_on_lane(channel) is not None
 
     def merge_detected_spools(self, detected_spools):
         for holder, detected_fields in zip(self.spool_holders, detected_spools):

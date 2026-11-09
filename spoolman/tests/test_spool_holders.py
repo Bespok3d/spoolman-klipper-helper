@@ -133,3 +133,12 @@ def test_clear_ids_empties_the_shared_cache_in_place():
     holders.spools_by_id[104] = TAGGED
     holders.clear_ids()
     assert cache_alias == {}  # same dict object, emptied (live readers keep working)
+
+
+def test_the_tag_on_a_lane_is_handed_back_only_for_a_tagged_lane():
+    holders, _macros, _pushes, _logs = build_holders()
+    holders.store_channel_report(2, TAGGED)
+    holders.store_channel_report(1, UNTAGGED)
+    assert holders.tag_on_lane(2) is TAGGED
+    assert holders.tag_on_lane(1) is None
+    assert holders.tag_on_lane(0) is None

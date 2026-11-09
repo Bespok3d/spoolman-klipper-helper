@@ -172,6 +172,11 @@ every behavior below.
   `SET_PRINT_FILAMENT_CONFIG` command (no patches, persisted like a screen edit). A tagged lane
   is included in that write only when **Spoolman pick overrides a tagged lane** is on; off, the
   firmware keeps what the tag filed.
+- **Multi colour spools** (silk dual or tri colour, coaxial, gradient) are written with all their
+  colours, up to the five the printer holds. When the tag and Spoolman describe the same spool,
+  the one naming more colours wins, so neither side flattens the other to a single colour. The
+  printer's colour mode is always sent as its default (`MULTI_MODE=0`), because what its other
+  values mean is not documented.
 
 ### Scenarios
 

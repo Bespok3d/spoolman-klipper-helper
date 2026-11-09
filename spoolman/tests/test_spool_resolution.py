@@ -101,9 +101,11 @@ class RecordingWriter:
         self.applied_spools = []
         self.labelled_lanes = []
         self.blanked_lanes = []
+        self.tags_on_applied_lanes = []
 
-    def apply_spool(self, extruder, spool):
+    def apply_spool(self, extruder, spool, tag_on_lane=None):
         self.applied_spools.append((extruder, spool))
+        self.tags_on_applied_lanes.append(tag_on_lane)
         return self.label_lane(extruder, spool)
 
     def label_lane(self, extruder, spool):
@@ -192,6 +194,15 @@ def test_a_resolved_tag_writes_the_spoolman_record_the_slicer_reads():
     resolution.apply_spool_for_extruder(3)
     assert helper.writer.applied_spools == [(3, silk)]
     assert slicer_filament_description(silk) == "Polymaker PLA Silk"
+
+
+def test_a_resolved_tag_is_handed_to_the_writer_so_its_colours_can_be_weighed():
+    # The writer keeps whichever of the tag and the Spoolman record names more colours; it can
+    # only do that when it is shown the tag the lane carries.
+    resolution, helper, _afc_pushes = build_resolution()
+    helper.holders.spool_holders[2] = dict(TAGGED)
+    resolution.apply_spool_for_extruder(2)
+    assert helper.writer.tags_on_applied_lanes == [TAGGED]
 
 
 def test_apply_with_no_holder_warns_and_never_resolves():

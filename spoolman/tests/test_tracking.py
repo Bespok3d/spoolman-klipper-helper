@@ -59,14 +59,17 @@ class FakeHelper:
         self.spools_by_id = {}
         self.logging = "info"
         self.afc_pushes = []
-        self.tagged_lanes = set()
+        self.tags_on_lanes = {}
         self.remembered = []
 
     def push_spool_to_afc(self, channel, spool_id):
         self.afc_pushes.append((channel, spool_id))
 
+    def tag_on_lane(self, channel):
+        return self.tags_on_lanes.get(channel)
+
     def lane_is_tagged(self, channel):
-        return channel in self.tagged_lanes
+        return channel in self.tags_on_lanes
 
     def remember_manual_spool(self, tool_index, spool_id):
         self.remembered.append((tool_index, spool_id))
@@ -228,6 +231,21 @@ def test_idle_pick_writes_screen_name_and_afc():
     assert tracking.helper.remembered == [(2, 104)]  # persisted for the next restart
 
 
+def test_a_pick_on_a_tagged_lane_keeps_the_tags_richer_colours():
+    # The tag on E2 names three colours for spool 104, Spoolman only one: the screen write keeps
+    # all three instead of flattening the spool to the Spoolman colour.
+    tracking, _spoolman, macros, _logs = build_tracking()
+    tracking.helper.tags_on_lanes[2] = {
+        "VENDOR": "Flashforge", "MAIN_TYPE": "PLA", "SUB_TYPE": "Basic", "SPOOL_ID": 104,
+        "ARGB_COLOR": 0xFF112233, "ALPHA": 0xFF, "COLOR_NUMS": 3,
+        "RGB_1": 0x112233, "RGB_2": 0x445566, "RGB_3": 0x778899,
+    }
+    tracking.on_primed({}, None, afc_present=True)
+    tracking.on_pick(2, 104, "standby")
+    assert any(cmd.startswith("SET_PRINT_FILAMENT_CONFIG CONFIG_EXTRUDER=2")
+               and "COLORS=112233,445566,778899" in cmd for cmd in macros.commands)
+
+
 def test_a_str_keyed_label_cache_entry_still_labels_the_spool():
     # A tag's SPOOL_ID arrives as str or int depending on its source; a str-keyed cache entry
     # must not degrade the log line to "Spoolman spool 24".
@@ -335,7 +353,7 @@ def test_afc_panel_pick_lands_on_the_lanes_home_tool():
 
 def test_afc_panel_pick_on_a_tagged_lane_is_ignored():
     tracking, _spoolman, macros, logs = build_tracking()
-    tracking.helper.tagged_lanes.add(2)
+    tracking.helper.tags_on_lanes[2] = {"SPOOL_ID": 57, "MAIN_TYPE": "PLA"}
     tracking.on_primed({2: 57}, None, afc_present=True)
     tracking.on_afc_lane_pick(2, 94, "standby")
     assert macros.tool_spool_sets == []

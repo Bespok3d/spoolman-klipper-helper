@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.1.40
+
+- Fix: a spool with several colours (silk dual or tri colour, coaxial, gradient) now reaches the
+  screen and the AFC panel with all its colours. Before, Spoolman's colour list was ignored and the
+  spool showed up as plain white.
+- Fix: when the tag and Spoolman describe the same spool, the one with more colours wins. A tag with
+  three colours is no longer flattened to the single colour Spoolman holds, and a Spoolman spool
+  with four colours is no longer flattened by a tag that holds one.
+- Note: the printer's colour mode for multi colour spools is always sent as its default, because
+  what the other modes mean is not known yet.
+
 ## 0.1.39
 
 - Fix: when two of your Spoolman filaments have the same article number, a tag with that number no

@@ -133,6 +133,9 @@ class SpoolmanHelper:
     def lane_is_tagged(self, channel):
         return self.holders.lane_is_tagged(channel)
 
+    def tag_on_lane(self, channel):
+        return self.holders.tag_on_lane(channel)
+
     def remember_manual_spool(self, tool_index, spool_id):
         self.manual_restore.remember(tool_index, spool_id)
 

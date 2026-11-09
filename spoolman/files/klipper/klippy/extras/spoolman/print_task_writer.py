@@ -20,6 +20,11 @@ import base64
 import re
 
 from .carrier_watch import ACTIVE_PRINT_STATES, print_state
+from .spool_colours import (
+    FIRMWARE_COLOURS_SEPARATOR,
+    multi_colour_args,
+    tag_describing_spool,
+)
 
 RGB_HEX_LENGTH = 6
 RGBA_HEX_LENGTH = 8
@@ -31,6 +36,8 @@ CONFIG_FIELD_BY_ARG = {
     "FILAMENT_SUBTYPE": "filament_sub_type",
     "FILAMENT_COLOR_RGBA": "filament_color_rgba",
 }
+# A multi colour write names its colours in COLORS instead of FILAMENT_COLOR_RGBA.
+FILAMENT_FIELD_ARGS = (*CONFIG_FIELD_BY_ARG, "COLORS")
 QUOTED_ARGS = ("VENDOR", "FILAMENT_TYPE", "FILAMENT_SUBTYPE")
 # Spoolman has no sub-type field of its own; the firmware requires one next to FILAMENT_TYPE
 # ("incomplete parameters"), and Orca matches on it. Three sources can carry it, tried in the
@@ -178,14 +185,19 @@ def _slicer_filament_fields(spool, subtype_sources):
     return (vendor, material, subtype_for_slicers(spool, subtype_sources))
 
 
+# tag_info is the tag on the lane when it describes this same spool; its colours win when it
+# names more of them than the Spoolman record does.
 def filament_config_args_from_spool(
-    spool, physical_extruder, subtype_sources=DEFAULT_SUBTYPE_SOURCES
+    spool, physical_extruder, subtype_sources=DEFAULT_SUBTYPE_SOURCES, tag_info=None
 ):
     color = normalize_color_rgba(_filament_record(spool).get("color_hex") or "")
+    multi_colour = multi_colour_args(spool, tag_info)
     fields = _slicer_filament_fields(spool, subtype_sources)
     args = {"CONFIG_EXTRUDER": str(physical_extruder)}
     if fields:
         args["VENDOR"], args["FILAMENT_TYPE"], args["FILAMENT_SUBTYPE"] = fields
+    if multi_colour:
+        return {**args, **multi_colour}
     if color:
         args["FILAMENT_COLOR_RGBA"] = color
     return args
@@ -202,7 +214,7 @@ def filament_config_clear_args(physical_extruder):
 
 
 def has_filament_fields(args):
-    return any(arg in args for arg in CONFIG_FIELD_BY_ARG)
+    return any(arg in args for arg in FILAMENT_FIELD_ARGS)
 
 
 def _strip_unsafe(value):
@@ -252,12 +264,56 @@ def _value_at(values, index):
     return values[index] if 0 <= index < len(values) else None
 
 
+# The colours a lane holds, as the firmware files them: a tag fills all five slots and says how
+# many count. None when the config carries no colour list for the lane.
+def _lane_colours(print_task_config, physical_extruder):
+    lane_multi = _value_at(print_task_config.get("filament_color_multi") or [], physical_extruder)
+    if not isinstance(lane_multi, dict) or "colors" not in lane_multi:
+        return None
+    colour_count = lane_multi.get("nums", 1)
+    return [str(colour).upper() for colour in lane_multi["colors"][:colour_count]]
+
+
+def _lane_alpha(print_task_config, physical_extruder):
+    lane_multi = _value_at(print_task_config.get("filament_color_multi") or [], physical_extruder)
+    return lane_multi.get("alpha") if isinstance(lane_multi, dict) else None
+
+
+def _desired_colours(desired_args):
+    if "COLORS" in desired_args:
+        return desired_args["COLORS"].split(FIRMWARE_COLOURS_SEPARATOR)
+    return [desired_args["FILAMENT_COLOR_RGBA"][:RGB_HEX_LENGTH]]
+
+
+def _multi_colours_match(print_task_config, physical_extruder, desired_args):
+    return (
+        _lane_colours(print_task_config, physical_extruder) == _desired_colours(desired_args)
+        and _lane_alpha(print_task_config, physical_extruder) == int(desired_args["ALPHA"])
+    )
+
+
+# A lane left holding several colours is not matched by a single colour that happens to equal
+# its first one. A config with no colour list for the lane is judged on the RGBA alone.
+def _single_colour_matches(print_task_config, physical_extruder, desired_args):
+    lane_colours = _lane_colours(print_task_config, physical_extruder)
+    return lane_colours is None or lane_colours == _desired_colours(desired_args)
+
+
+def _colour_checks(print_task_config, physical_extruder, desired_args):
+    if "COLORS" in desired_args:
+        return [_multi_colours_match(print_task_config, physical_extruder, desired_args)]
+    if "FILAMENT_COLOR_RGBA" in desired_args:
+        return [_single_colour_matches(print_task_config, physical_extruder, desired_args)]
+    return []
+
+
 def config_already_matches(print_task_config, physical_extruder, desired_args):
-    checks = [
+    field_checks = [
         _value_at(print_task_config.get(field, []), physical_extruder) == desired_args[arg]
         for arg, field in CONFIG_FIELD_BY_ARG.items()
         if arg in desired_args
     ]
+    checks = field_checks + _colour_checks(print_task_config, physical_extruder, desired_args)
     return bool(checks) and all(checks)
 
 
@@ -333,8 +389,13 @@ class PrintTaskWriter:
             return
         self._send_or_hold_filament_config(physical_extruder, desired_args, failure_problem)
 
-    def apply_spool(self, physical_extruder, spool):
-        desired = filament_config_args_from_spool(spool, physical_extruder, self.subtype_sources)
+    # tag_on_lane is the tag report the lane holds, if any: when it describes this same spool and
+    # names more colours than the Spoolman record, a multi colour tag is not flattened.
+    def apply_spool(self, physical_extruder, spool, tag_on_lane=None):
+        tag_info = tag_describing_spool(tag_on_lane, (spool or {}).get("id"))
+        desired = filament_config_args_from_spool(
+            spool, physical_extruder, self.subtype_sources, tag_info
+        )
         if not has_filament_fields(desired):
             return
         if self._should_write(physical_extruder, desired):
