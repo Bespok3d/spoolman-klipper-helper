@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.1.38
+
+- Fix: a lane carrying an OpenSpool tag with no `spool_id` field now binds the spool its card UID
+  matched. The RFID reader files the missing id as its default, the string `"0"`. The chain already
+  skipped it and resolved the card by UID (`Resolved by UID ...: spool 18`), but the lane then kept
+  the `"0"`, set the tool's `spool_id` to `'0'`, and asked Spoolman for `/api/v1/spool/0`, so every
+  read ended in `Spool fetch failed for 0` and usage was never logged against the real spool. A
+  `"0"`, `0` or empty id on the tag now counts as no id at all, the same rule the chain itself
+  already applies.
+
 ## 0.1.37
 
 - Fix: debug logging no longer prints your whole Spoolman inventory every time a lane is looked up.
@@ -9,13 +19,6 @@
   leaves its evidence in the debug log. Before, all you saw was that nothing matched. The log now
   shows, for that lane only, the tag data exactly as the reader stored it, how the helper read it
   (brand, material, color) and its card UID.
-- Fix: a lane carrying an OpenSpool tag with no `spool_id` field now binds the spool its card UID
-  matched. The RFID reader files the missing id as its default, the string `"0"`. The chain already
-  skipped it and resolved the card by UID (`Resolved by UID ...: spool 18`), but the lane then kept
-  the `"0"`, set the tool's `spool_id` to `'0'`, and asked Spoolman for `/api/v1/spool/0`, so every
-  read ended in `Spool fetch failed for 0` and usage was never logged against the real spool. A
-  `"0"`, `0` or empty id on the tag now counts as no id at all, the same rule the chain itself
-  already applies.
 
 ## 0.1.36
 
