@@ -7,9 +7,19 @@
   says why, so you can keep that article number on one filament only.
 - Fix: a tag is now found by its article number whatever the letter case. Before, `sm-pla` on the
   tag missed a filament saved as `SM-PLA`, while making a new spool already ignored the case.
-- Fix: with auto-bind on, the tag of a second roll of the same filament is no longer written onto
-  the first roll's spool for good. A tag is now written onto a spool only while none of that
-  filament's spools has a tag yet. Bind any later tag by hand.
+- Fix: a second roll of a filament is now tracked as its own spool. Before, it could be tracked as
+  the first roll's spool, so both rolls used up one spool in Spoolman. Now it takes a spool of that
+  filament that has no tag yet, or gets a new spool with its tag tied to it. Two new rolls loaded at
+  the same moment no longer both take the same spool either.
+  Heads-up: a spool with a tag on each side becomes two spools the first time you load it the other
+  way round. Delete the extra spool in Spoolman, then link that tag to the first spool.
+- Fix: writing a tag onto a spool you picked no longer puts its article number on a second
+  filament. If another filament already has that number, nothing is written and the console says
+  how to sort it out.
+- Fix: an article number with a space, `+`, `&` or a similar sign is now looked up exactly as
+  written. Before, Spoolman could get a changed number and miss the filament.
+- Fix: when Spoolman does not answer while a tag is being tied to a spool, the spool is left as it
+  was. Before, its other extra fields could be wiped.
 
 ## 0.1.38
 

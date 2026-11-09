@@ -1,6 +1,7 @@
 import json
 import logging
 import uuid
+from urllib.parse import quote
 
 import gcode
 
@@ -9,6 +10,7 @@ from .helper_options import HelperOptions
 from .spool_candidates import candidate_spools
 from .tag_registration import (
     article_number_is_shared,
+    article_number_on_another_filament,
     card_details_payload,
     dimensions_of_material,
     filament_payload,
@@ -19,6 +21,7 @@ from .tag_registration import (
     vendor_payload,
 )
 from .unmatched_tag import (
+    REGISTER_ARTICLE_NUMBER_TAKEN,
     REGISTER_DISABLED,
     REGISTER_REFUSED,
     REGISTER_SHARED_ARTICLE_NUMBER,
@@ -55,6 +58,7 @@ class Spoolman:
         self.write_form = section.card_uids_write_form
         self.register_from_tag = section.register_from_tag
         self._active_spool_epoch = 0
+        self._claims_awaiting_bind = {}
 
     def set_active_spool(self, spool_id):
         try:
@@ -229,6 +233,20 @@ class Spoolman:
             on_applied(REGISTER_REFUSED)
             return
 
+        def on_filaments(error, filaments):
+            if error:
+                self.logs.verbose(
+                    f"Cannot check the tag's article number, Spoolman was silent: {error}")
+                on_applied(REGISTER_UNREACHABLE)
+                return
+            if article_number_on_another_filament(filament_info, filaments or [], filament_id):
+                on_applied(REGISTER_ARTICLE_NUMBER_TAKEN)
+                return
+            self._patch_tag_onto_filament(filament_info, spool_id, filament_id, on_applied)
+
+        SpoolmanRequest(self.webhooks, self.logs, on_filaments).fetch("/api/v1/filament", "")
+
+    def _patch_tag_onto_filament(self, filament_info, spool_id, filament_id, on_applied):
         def on_patched(error, payload):
             if error:
                 on_applied(REGISTER_REFUSED)
@@ -268,7 +286,7 @@ class Spoolman:
             spool_request.fetch("/api/v1/spool", f"filament.id={filament_id}")
 
         filament_request = SpoolmanRequest(self.webhooks, self.logs, on_filament_result)
-        filament_request.fetch("/api/v1/filament", f"article_number={sku}")
+        filament_request.fetch("/api/v1/filament", f"article_number={quote(str(sku), safe='')}")
 
     # The callback is handed the resolved spool (None when nothing matched) and whether Spoolman
     # went unanswered along the way, because a lane the user must go and fix in Spoolman and a
@@ -333,30 +351,92 @@ class Spoolman:
             advance()
             return
 
-        def on_lookup(error, spools):
-            if error or not spools:
+        def on_lookup(error, filament_spools):
+            if error or not filament_spools:
                 self.logs.verbose(f"Cannot find spools for sku: {sku}")
                 advance(unanswered=bool(error))
                 return
-            self.logs.debug(f"Resolved by sku->{sku}: spool {spools[0].get('id')}")
-            self._auto_register_uid(spools, uid)
-            callback(spools[0], False)
+            self._spool_of_this_roll(info, uid, filament_spools, callback, advance)
 
         self.lookup_spoolman(sku, on_lookup)
 
-    # Once any spool of this filament carries a tag, a new tag could be that spool's other side or
-    # another roll of the same filament, and nothing tells the two apart. Binding it to the first
-    # spool would tie a second roll to the first roll for good, so only a filament none of whose
-    # spools carries a tag yet gets the tag written on.
-    def _auto_register_uid(self, filament_spools, uid):
-        if not (self.auto_register and uid):
+    # Each physical roll is its own spool. A tag already bound to a spool is that spool whatever
+    # the strategy order, so the owner is looked for first; a tag bound to nothing only ever gets a
+    # spool no other tag is bound to, never the spool of another roll of the same filament.
+    def _spool_of_this_roll(self, info, uid, filament_spools, callback, advance):
+        if not uid:
+            self._claim_untagged_spool(info, uid, filament_spools, callback, advance)
             return
-        if any(card_uids.spool_card_uids(spool) for spool in filament_spools):
-            self.logs.verbose(f"Not auto-binding UID {uid}: a spool of this filament has a tag")
+
+        def on_spools(error, spools):
+            if error:
+                advance(unanswered=True)
+                return
+            owner = card_uids.match_spool_by_card_uid(spools or [], uid)
+            if owner:
+                self.logs.debug(f"Resolved by UID {uid} in the SKU step: spool {owner.get('id')}")
+                callback(owner, False)
+                return
+            self._claim_untagged_spool(info, uid, filament_spools, callback, advance)
+
+        self._fetch_all_spools(on_spools)
+
+    # A claim only shows in Spoolman once its bind lands. Until then a second lane resolving at the
+    # same moment would still see the spool untagged and take it for its own roll, so the claims in
+    # flight are kept here, per tag, and the spool goes to one roll only.
+    def _claim_untagged_spool(self, info, uid, filament_spools, callback, advance):
+        own_claim = self._spool_claimed_by(uid, filament_spools)
+        if own_claim:
+            callback(own_claim, False)
             return
-        spool_id = filament_spools[0].get("id")
-        if spool_id:
-            self.bind_uid(spool_id, uid)
+        untagged_spool = card_uids.first_untagged_spool(self._unclaimed_spools(filament_spools))
+        if not untagged_spool:
+            self._spool_for_new_roll(info, uid, filament_spools, callback, advance)
+            return
+        self.logs.debug(f"Resolved by sku->{info.get('SKU')}: spool {untagged_spool.get('id')}")
+        if self.auto_register and uid:
+            self._bind_claimed_spool(untagged_spool.get("id"), uid)
+        callback(untagged_spool, False)
+
+    def _spool_claimed_by(self, uid, filament_spools):
+        claimed_spool_id = self._claims_awaiting_bind.get(uid)
+        if claimed_spool_id is None:
+            return None
+        return card_uids.find_spool_by_id(filament_spools, claimed_spool_id)
+
+    def _unclaimed_spools(self, filament_spools):
+        claimed_spool_ids = set(self._claims_awaiting_bind.values())
+        return [spool for spool in filament_spools if spool.get("id") not in claimed_spool_ids]
+
+    def _bind_claimed_spool(self, spool_id, uid):
+        def on_bound(_bound):
+            self._claims_awaiting_bind.pop(uid, None)
+
+        self._claims_awaiting_bind[uid] = spool_id
+        self.bind_uid(spool_id, uid, on_bound)
+
+    # Every spool of the filament already carries another roll's tag, so this roll gets a spool of
+    # its own through the same path that makes one for a tag Spoolman has never seen. A tag with no
+    # stable UID could not be bound to that spool and would make another one on every insert.
+    def _spool_for_new_roll(self, info, uid, filament_spools, callback, advance):
+        sku = info.get("SKU")
+        filament_id = (filament_spools[0].get("filament") or {}).get("id")
+        if not (uid and self.register_from_tag and filament_id):
+            self.logs.verbose(f"Every spool for SKU {sku} has another roll's tag, none is this one")
+            advance()
+            return
+
+        def on_registered(spool_id, problem, new_spool=None):
+            if problem:
+                self.logs.warn(f"Spoolman did not make a spool for this new roll of SKU {sku}")
+                advance()
+                return
+            self.logs.log(
+                f"Every spool for SKU {sku} has another roll's tag, so this roll is now "
+                f"Spoolman spool {spool_id}")
+            callback(new_spool, False)
+
+        self._create_spool(info, filament_id, on_registered)
 
     def define_card_uids_field(self):
         def on_done(error, payload):
@@ -374,9 +454,19 @@ class Spoolman:
             return
 
         def on_spools(error, spools):
+            if error:
+                self._report_failed_bind(spool_id, error, on_done)
+                return
             self._bind_unless_assigned(spool_id, uid, spools or [], on_done)
 
         self._fetch_all_spools(on_spools)
+
+    # Without the inventory there is no telling whether another spool owns the UID, and no current
+    # extra to merge into, so a PATCH then would wipe the spool's other extra fields.
+    def _report_failed_bind(self, spool_id, error, on_done):
+        self.logs.log(f"Bind failed for spool {spool_id}: {error}")
+        if on_done:
+            on_done(False)
 
     def _bind_unless_assigned(self, spool_id, uid, spools, on_done):
         owner = card_uids.match_spool_by_card_uid(spools, uid)

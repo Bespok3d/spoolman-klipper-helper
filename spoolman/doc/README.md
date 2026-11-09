@@ -101,11 +101,15 @@ either form is read back correctly here. Bindings are
 additive and de-duplicated, and a spool's other fields are preserved. Re-randomizing tags
 (DESFire) are never used as a key.
 
+- **One roll, one spool:** a tag found by SKU is only ever given a spool of that filament that has
+  no tag yet. When every spool of that filament already has a tag, the roll is a new one: a spool
+  is made for it and its tag is tied to it (needs `register_from_tag`, on by default, and a tag
+  with a stable UID; otherwise the lane stays untracked). A spool with a tag on each side becomes
+  two spools the first time you load it the other way round: delete the extra spool in Spoolman,
+  then link that tag to the first spool.
 - **Auto-bind** (off by default): turn on **Auto-bind tag UID on SKU match** and the first time a
-  spool is resolved by SKU its current tag UID is written onto that spool, so the next tap is a
-  direct UID match. This happens only while none of that filament's spools has a tag yet: a new tag
-  after that could be the other side of a spool or a second roll, so bind it by hand. With it off,
-  UIDs are only ever bound when you ask.
+  spool with no tag yet is resolved by SKU, the current tag UID is written onto it, so the next tap
+  is a direct UID match. With it off, UIDs are only bound when you ask or when a spool is made.
 - **Manual bind:** run `SH_BIND_CARD_UID CHANNEL={0..3} SPOOL=<id>` to bind the tag currently on a
   lane to a specific Spoolman spool. Handy to recover from a miss, or to register a tag up front.
 
@@ -235,7 +239,8 @@ slicer:
   tag UID; it says so when there is none.
 - `SH_APPLY_TAG_TO_SPOOL CHANNEL={0..3} SPOOL=<id>` writes what the lane's tag says onto a Spoolman
   spool you picked (brand, material, sub-type, colour, article number) and binds the tag to it. The
-  lane starts reporting that spool straight away.
+  lane starts reporting that spool straight away. If another filament already has the tag's article
+  number, nothing is written and the console says so.
 - `SH_ADD_SPOOL_FROM_TAG CHANNEL={0..3}` creates a new Spoolman spool from what the lane's tag says,
   binds the tag to it and puts the lane on it. Asking for one by hand works whether or not
   **Create spools from tags** is on.
@@ -263,8 +268,8 @@ slicer:
 - **Log level** (`error` < `info` < `warn` < `verbose` < `debug`): how chatty the logs are.
 - **Spool resolution order** (default `spool_id,uid,sku`): the identity chain used to match a tag
   to a Spoolman spool, first match wins. See [Identifying spools by tag](#identifying-spools-by-tag).
-- **Auto-bind tag UID on SKU match** (off by default): when a spool is found by SKU and no spool of
-  that filament has a UID yet, write the current tag's UID onto it so the next tap is a direct match.
+- **Auto-bind tag UID on SKU match** (off by default): when a spool with no tag yet is found by
+  SKU, write the current tag's UID onto it so the next tap is a direct match.
 - **Make a spool out of a tag Spoolman does not have** (`register_from_tag`, on by default): when a
   tag matches nothing and none of your spools came close, create it in Spoolman from what the card
   carries and bind the card to it. It also covers writing a card onto a spool you picked

@@ -184,6 +184,11 @@ def match_spool_by_card_uid(spools, uid_hex):
     return None
 
 
+def first_untagged_spool(spools):
+    """The first spool no tag is bound to yet: the only kind a tag bound to nothing may claim."""
+    return next((spool for spool in spools if not spool_card_uids(spool)), None)
+
+
 def find_spool_by_id(spools, spool_id):
     """The spool with this id in a fetched list (to read its current extra before a PATCH)."""
     for spool in spools or []:

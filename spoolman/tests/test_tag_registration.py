@@ -20,6 +20,7 @@ from spoolman.tag_registration import (
     vendor_id_named,
 )
 from spoolman.unmatched_tag import (
+    REGISTER_ARTICLE_NUMBER_TAKEN,
     REGISTER_DISABLED,
     REGISTER_REFUSED,
     REGISTER_SHARED_ARTICLE_NUMBER,
@@ -27,7 +28,7 @@ from spoolman.unmatched_tag import (
     REGISTER_UNREACHABLE,
     registration_problem_message,
 )
-from test_spool_resolution import FakeWebRequest, SpoolmanServerWebhooks
+from test_spool_resolution import SpoolmanCreatesWebhooks
 
 TAG = {
     "VENDOR": "ELEGOO", "MAIN_TYPE": "PLA", "SUB_TYPE": "Matte",
@@ -97,28 +98,6 @@ def test_a_field_the_card_left_blank_is_left_out_rather_than_blanked_in_spoolman
     assert card_details_payload({"MAIN_TYPE": "PLA", "SUB_TYPE": "", "SKU": ""}) == {
         "material": "PLA"
     }
-
-
-class SpoolmanCreatesWebhooks(SpoolmanServerWebhooks):
-    """A Spoolman that answers reads from a fixture and hands every write a new record id."""
-
-    def __init__(self, printer, spools_by_request, refuses=()):
-        super().__init__(printer, spools_by_request)
-        self.written = []
-        self.refuses = refuses
-
-    def call_remote_method(self, method, **params):
-        if params.get("request_method", "GET") == "GET":
-            super().call_remote_method(method, **params)
-            return
-        RecordingWebhooks.call_remote_method(self, method, **params)
-        self.written.append((params["request_method"], params["path"], params["body"]))
-        self.endpoints[params["cb_endpoint"]](
-            FakeWebRequest(params["cb_endpoint"], self._created(params["path"]))
-        )
-
-    def _created(self, path):
-        return {} if path in self.refuses else {"id": 900 + len(self.written)}
 
 
 THEIR_INVENTORY = {
@@ -237,9 +216,10 @@ def test_a_spool_asked_for_by_hand_is_created_with_the_config_option_off():
     assert "/api/v1/spool" in created_paths(webhooks)
 
 
-def apply_tag(spools, logs=None):
+def apply_tag(spools, logs=None, filaments=()):
     printer = FakePrinter()
-    webhooks = SpoolmanCreatesWebhooks(printer, {("/api/v1/spool", ""): spools})
+    webhooks = SpoolmanCreatesWebhooks(
+        printer, {("/api/v1/spool", ""): spools, ("/api/v1/filament", ""): list(filaments)})
     printer.objects["webhooks"] = webhooks
     spoolman = Spoolman(printer, logs or RecordingLogs())
     applied = []
@@ -255,6 +235,21 @@ def test_a_tag_can_be_written_onto_a_spool_they_picked():
         "article_number": "EL-PLA-M-TEAL",
     })
     assert webhooks.written[1][1] == "/api/v1/spool/104", "the card is bound to their pick"
+
+
+def test_the_tag_is_written_when_the_picked_spools_own_filament_has_its_article_number():
+    applied, webhooks = apply_tag([{"id": 104, "filament": {"id": 12}}],
+                                  filaments=[filament(id=12, article_number="el-pla-m-teal")])
+    assert applied == [None]
+    assert webhooks.written[0][1] == "/api/v1/filament/12"
+
+
+def test_an_article_number_another_filament_has_is_never_written_onto_a_second_one():
+    applied, webhooks = apply_tag([{"id": 104, "filament": {"id": 12}}],
+                                  filaments=[filament(id=13, article_number="el-pla-m-teal")])
+    assert applied == [REGISTER_ARTICLE_NUMBER_TAKEN]
+    assert webhooks.written == []
+    assert "channel 2" in registration_problem_message(2, REGISTER_ARTICLE_NUMBER_TAKEN, TAG)
 
 
 def test_writing_onto_a_spool_that_is_not_theirs_changes_nothing():

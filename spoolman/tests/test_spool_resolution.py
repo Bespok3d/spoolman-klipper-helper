@@ -639,9 +639,65 @@ class SpoolmanServerWebhooks(RecordingWebhooks):
         self.endpoints[params["cb_endpoint"]](FakeWebRequest(params["cb_endpoint"], payload))
 
 
-def resolve_through_real_chain(info, spools_by_request=None, logs=None, **written_options):
+class SpoolmanCreatesWebhooks(SpoolmanServerWebhooks):
+    """A Spoolman that answers reads from a fixture and hands every write a new record id."""
+
+    def __init__(self, printer, spools_by_request, refuses=()):
+        super().__init__(printer, spools_by_request)
+        self.written = []
+        self.refuses = refuses
+
+    def call_remote_method(self, method, **params):
+        if params.get("request_method", "GET") == "GET":
+            super().call_remote_method(method, **params)
+            return
+        RecordingWebhooks.call_remote_method(self, method, **params)
+        self.requested.append((params["path"], params["query"]))
+        self.written.append((params["request_method"], params["path"], params["body"]))
+        self.endpoints[params["cb_endpoint"]](
+            FakeWebRequest(params["cb_endpoint"], self._created(params["path"]))
+        )
+
+    def _created(self, path):
+        return {} if path in self.refuses else {"id": 900 + len(self.written)}
+
+
+class SpoolmanHoldsAnswersWebhooks(SpoolmanCreatesWebhooks):
+    """A Spoolman still busy with the listed requests: they go out and no answer comes back."""
+
+    def __init__(self, printer, spools_by_request, held_requests):
+        super().__init__(printer, spools_by_request)
+        self.held_requests = held_requests
+        self.held = []
+
+    def call_remote_method(self, method, **params):
+        request = (params.get("request_method"), params.get("path"), params.get("query"))
+        if request not in self.held_requests:
+            super().call_remote_method(method, **params)
+            return
+        RecordingWebhooks.call_remote_method(self, method, **params)
+        self.held.append(request)
+
+
+def spoolman_on(webhooks, logs=None, **written_options):
+    webhooks.printer.objects["webhooks"] = webhooks
+    return Spoolman(webhooks.printer, logs or RecordingLogs(), helper_options(**written_options))
+
+
+def resolve_each(spoolman, tags):
+    resolved = []
+
+    def collect(spool, spoolman_unanswered):
+        resolved.append(spool)
+
+    for tag in tags:
+        spoolman.resolve_spool(tag, collect)
+    return resolved
+
+
+def resolve_writing_through_real_chain(info, spools_by_request=None, logs=None, **written_options):
     printer = FakePrinter()
-    webhooks = SpoolmanServerWebhooks(printer, spools_by_request or SPOOLMAN_SERVER)
+    webhooks = SpoolmanCreatesWebhooks(printer, spools_by_request or SPOOLMAN_SERVER)
     printer.objects["webhooks"] = webhooks
     spoolman = Spoolman(printer, logs or RecordingLogs(), helper_options(**written_options))
     resolved = []
@@ -650,6 +706,12 @@ def resolve_through_real_chain(info, spools_by_request=None, logs=None, **writte
         resolved.append(spool)
 
     spoolman.resolve_spool(info, collect)
+    return resolved, webhooks
+
+
+def resolve_through_real_chain(info, spools_by_request=None, logs=None, **written_options):
+    resolved, webhooks = resolve_writing_through_real_chain(
+        info, spools_by_request, logs, **written_options)
     return resolved, webhooks.requested
 
 
@@ -759,20 +821,112 @@ def test_an_article_number_written_in_another_letter_case_still_resolves():
     assert resolved == [SKU_MATCHED_SPOOL]
 
 
-SECOND_ROLL_SPOOL = {"id": 32}
+FIRST_ROLL_SPOOL = {**UID_BOUND_SPOOL, "filament": {"id": 9}}
+UNTAGGED_SPOOL = {"id": 32, "filament": {"id": 9}}
+SECOND_ROLL_TAG = {**STOCK_SNAPMAKER_TAG, "CARD_UID": UNBOUND_UID_BYTES}
+EVERY_SPOOL_TAGGED_SERVER = {
+    ("/api/v1/spool", ""): [FIRST_ROLL_SPOOL],
+    ("/api/v1/filament", f"article_number={SNAPMAKER_SKU}"):
+        [{"id": 9, "article_number": SNAPMAKER_SKU}],
+    ("/api/v1/spool", "filament.id=9"): [FIRST_ROLL_SPOOL],
+}
+
+
+@pytest.mark.parametrize("auto_register", [True, False])
+def test_a_second_roll_whose_tag_is_bound_to_nothing_becomes_a_spool_of_its_own(auto_register):
+    logs = RecordingLogs()
+    resolved, webhooks = resolve_writing_through_real_chain(
+        SECOND_ROLL_TAG, EVERY_SPOOL_TAGGED_SERVER, logs=logs,
+        card_uids_auto_register=auto_register)
+    assert resolved == [{"id": 901}]
+    assert webhooks.written[0] == ("POST", "/api/v1/spool", {"filament_id": 9})
+    assert webhooks.written[1][:2] == ("PATCH", "/api/v1/spool/901"), "the new roll's tag is bound"
+    assert not [path for _, path, _ in webhooks.written if path == "/api/v1/spool/77"]
+    assert any("is now Spoolman spool 901" in line for line in logs.lines)
+
+
+@pytest.mark.parametrize("tag, written_options", [
+    ({**STOCK_SNAPMAKER_TAG, "CARD_UID": [0, 0, 0, 0]}, {}),
+    (SECOND_ROLL_TAG, {"register_from_tag": False}),
+])
+def test_a_roll_no_spool_can_be_made_for_is_never_tracked_as_another_rolls_spool(
+        tag, written_options):
+    resolved, webhooks = resolve_writing_through_real_chain(
+        tag, EVERY_SPOOL_TAGGED_SERVER, **written_options)
+    assert resolved == [None]
+    assert webhooks.written == []
 
 
 @pytest.mark.parametrize("filament_spools", [
-    [UID_BOUND_SPOOL, SECOND_ROLL_SPOOL],
-    [SECOND_ROLL_SPOOL, UID_BOUND_SPOOL],
+    [FIRST_ROLL_SPOOL, UNTAGGED_SPOOL],
+    [UNTAGGED_SPOOL, FIRST_ROLL_SPOOL],
 ])
-def test_auto_bind_never_ties_a_new_tag_to_a_filament_whose_spools_already_carry_one(
-        filament_spools):
-    _resolved, requested = resolve_through_real_chain(
-        {**STOCK_SNAPMAKER_TAG, "CARD_UID": UNBOUND_UID_BYTES},
-        {**SPOOLMAN_SERVER, ("/api/v1/spool", "filament.id=9"): filament_spools},
+def test_a_tag_bound_to_nothing_takes_the_filaments_untagged_spool(filament_spools):
+    resolved, webhooks = resolve_writing_through_real_chain(
+        SECOND_ROLL_TAG,
+        {**EVERY_SPOOL_TAGGED_SERVER, ("/api/v1/spool", "filament.id=9"): filament_spools},
         card_uids_auto_register=True)
-    assert not [request for request in requested if request[0].startswith("/api/v1/spool/")]
+    assert resolved == [UNTAGGED_SPOOL]
+    assert [path for _, path, _ in webhooks.written] == ["/api/v1/spool/32"]
+
+
+UNTAGGED_SPOOL_SERVER = {
+    **EVERY_SPOOL_TAGGED_SERVER,
+    ("/api/v1/spool", "filament.id=9"): [FIRST_ROLL_SPOOL, UNTAGGED_SPOOL],
+}
+THIRD_ROLL_TAG = {**STOCK_SNAPMAKER_TAG, "CARD_UID": [0x04, 0x44, 0x55, 0x66]}
+BIND_ONTO_THE_UNTAGGED_SPOOL = ("PATCH", "/api/v1/spool/32", "")
+
+
+def test_two_new_rolls_resolving_at_once_never_share_the_untagged_spool():
+    webhooks = SpoolmanHoldsAnswersWebhooks(
+        FakePrinter(), UNTAGGED_SPOOL_SERVER, {BIND_ONTO_THE_UNTAGGED_SPOOL})
+    spoolman = spoolman_on(webhooks, card_uids_auto_register=True)
+    resolved = resolve_each(spoolman, [SECOND_ROLL_TAG, THIRD_ROLL_TAG])
+    assert resolved == [UNTAGGED_SPOOL, {"id": 901}]
+
+
+def test_the_same_roll_resolving_again_before_its_bind_lands_keeps_its_one_spool():
+    webhooks = SpoolmanHoldsAnswersWebhooks(
+        FakePrinter(), UNTAGGED_SPOOL_SERVER, {BIND_ONTO_THE_UNTAGGED_SPOOL})
+    spoolman = spoolman_on(webhooks, card_uids_auto_register=True)
+    resolved = resolve_each(spoolman, [SECOND_ROLL_TAG, SECOND_ROLL_TAG])
+    assert resolved == [UNTAGGED_SPOOL, UNTAGGED_SPOOL]
+    assert webhooks.held == [BIND_ONTO_THE_UNTAGGED_SPOOL]
+    assert webhooks.written == []
+
+
+def test_a_new_roll_spoolman_would_not_make_a_spool_for_is_said_on_the_console():
+    logs = RecordingLogs()
+    webhooks = SpoolmanCreatesWebhooks(
+        FakePrinter(), EVERY_SPOOL_TAGGED_SERVER, refuses=("/api/v1/spool",))
+    resolved = resolve_each(spoolman_on(webhooks, logs), [SECOND_ROLL_TAG])
+    assert resolved == [None]
+    assert any("did not make a spool for this new roll" in line for line in logs.lines)
+
+
+def test_a_bind_spoolman_never_listed_the_spools_for_leaves_the_spool_untouched():
+    webhooks = SpoolmanHoldsAnswersWebhooks(
+        FakePrinter(), UNTAGGED_SPOOL_SERVER, {("GET", "/api/v1/spool", "")})
+    spoolman = spoolman_on(webhooks)
+    outcomes = []
+    spoolman.bind_uid(32, "04112233", outcomes.append)
+    drain_timers(webhooks.printer.reactor)
+    assert outcomes == [False]
+    assert webhooks.written == []
+
+
+def test_a_tag_already_bound_elsewhere_resolves_to_its_spool_whatever_the_chain_order():
+    resolved, webhooks = resolve_writing_through_real_chain(
+        STOCK_SNAPMAKER_TAG, card_uids_strategy="sku", card_uids_auto_register=True)
+    assert resolved == [UID_BOUND_SPOOL]
+    assert webhooks.written == []
+
+
+def test_a_sku_is_sent_to_spoolman_url_encoded():
+    _resolved, requested = resolve_through_real_chain(
+        {**STOCK_SNAPMAKER_TAG, "SKU": "PLA+ BASIC&X", "CARD_UID": UNBOUND_UID_BYTES})
+    assert ("/api/v1/filament", "article_number=PLA%2B%20BASIC%26X") in requested
 
 
 def test_a_spool_id_on_the_tag_still_wins_over_both():

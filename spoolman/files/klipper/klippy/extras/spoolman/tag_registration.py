@@ -36,6 +36,13 @@ def article_number_is_shared(tag_info, filaments):
     return len(filaments_with_exact_article_number(filaments, tag_info.get("SKU"))) > 1
 
 
+# Writing the tag onto the filament of a spool they picked must not hand its article number to a
+# second filament: two filaments under one number leave the tag naming neither of them.
+def article_number_on_another_filament(tag_info, filaments, filament_id):
+    owners = filaments_with_exact_article_number(filaments, tag_info.get("SKU"))
+    return any(owner.get("id") != filament_id for owner in owners)
+
+
 # The tag may already be a filament they own: their own article number is the strongest word on
 # that, and a vendor, material, name and colour that all agree is the next strongest. Either way
 # the new spool hangs off the record they already curate instead of a duplicate of it.
