@@ -10,6 +10,9 @@ bare lowercase hex before it is compared or stored, so one physical tag is one U
 wrote it. The reverse is not guaranteed: our value is a JSON array inside the JSON string Spoolman
 requires of a text field, which a reader that only splits on commas does not decode, and the
 ``comma_separated`` write form exists for that reader.
+A spool carries a tag on each side, and each tag has its own UID. Some formats also write a spool
+identity both tags share (``SPOOL_UID``, the Bambu tray UID); it is bound beside the tag's own UID,
+so either side finds the spool.
 This module is the stdlib-only, unit-tested core: UID normalization + the random-UID guard, the
 field definition, reading a spool's ``card_uids``, the client-side match, the GET-merge-PATCH
 extra builder, and parsing the configurable resolution-strategy chain. The async Spoolman calls
@@ -18,6 +21,7 @@ live in ``spoolman.py``.
 import json
 
 CARD_UIDS_FIELD = "card_uids"
+SPOOL_UID_KEY = "SPOOL_UID"
 RANDOM_UID_PREFIX = 0x08  # NXP AN10927: a re-randomized UID starts with 0x08, not a stable key
 KNOWN_STRATEGIES = ("spool_id", "uid", "decoded_id", "sku", "manual")
 DEFAULT_STRATEGY = ("spool_id", "uid", "sku")
@@ -39,6 +43,9 @@ HEX_LITERAL_PREFIX = "0x"
 # A tag carries a 4-byte or a 7-byte UID, so 8 hex digits is the shortest a whole UID can be, and
 # anything narrower is a single byte of one that a writer spaced out rather than a UID of its own.
 SHORTEST_UID_HEX_DIGITS = 8
+# A tag's own UID is at most 10 bytes (ISO 14443), so a 16-byte UID is only ever a spool identity
+# both tags share (the Bambu tray UID).
+SPOOL_IDENTITY_HEX_DIGITS = 32
 
 
 def normalize_uid(card_uid):
@@ -74,6 +81,27 @@ def trackable_uid(card_uid):
 def tag_uid(filament_info):
     """The trackable UID of the tag a lane reader stored."""
     return trackable_uid(filament_info.get("CARD_UID"))
+
+
+def spool_uid(filament_info):
+    """The spool identity both tags of one spool share, or None when the format has none."""
+    identity = normalize_uid(filament_info.get(SPOOL_UID_KEY))
+    return identity if identity and is_spool_identity(identity) else None
+
+
+def is_spool_identity(uid_hex):
+    """Whether this UID is a spool identity both tags share rather than one tag's own UID."""
+    return len(canonical_uid(uid_hex)) == SPOOL_IDENTITY_HEX_DIGITS
+
+
+def holds_spool_identity(bound_uids):
+    """Whether these UIDs include a spool identity, so either side of the spool finds it."""
+    return any(is_spool_identity(uid) for uid in bound_uids)
+
+
+def binding_uids(filament_info):
+    """Every UID that ties this tag to its spool: the tag's own, then the shared spool identity."""
+    return [uid for uid in (tag_uid(filament_info), spool_uid(filament_info)) if uid]
 
 
 def parse_write_form(text, default=DEFAULT_WRITE_FORM):
@@ -184,6 +212,27 @@ def match_spool_by_card_uid(spools, uid_hex):
     return None
 
 
+def match_spool_by_card_uids(spools, uids):
+    """The spool bound to any of these UIDs, tried in order (on a collision: first wins)."""
+    return next((owner for _uid, owner in _owners_of_uids(spools, uids)), None)
+
+
+def uid_bound_elsewhere(spools, uids, spool_id):
+    """The first of these UIDs a spool other than ``spool_id`` owns, with that spool, or None."""
+    return next(((uid, owner) for uid, owner in _owners_of_uids(spools, uids)
+                 if owner.get("id") != spool_id), None)
+
+
+def _owners_of_uids(spools, uids):
+    owners = ((uid, match_spool_by_card_uid(spools, uid)) for uid in uids)
+    return ((uid, owner) for uid, owner in owners if owner)
+
+
+def uids_missing_from_spool(spool, uids):
+    """The UIDs not yet bound to the spool, so a bind writes only what is new."""
+    return [uid for uid in uids if not spool_has_card_uid(spool, uid)]
+
+
 def first_untagged_spool(spools):
     """The first spool no tag is bound to yet: the only kind a tag bound to nothing may claim."""
     return next((spool for spool in spools if not spool_card_uids(spool)), None)
@@ -197,21 +246,24 @@ def find_spool_by_id(spools, spool_id):
     return None
 
 
-def merged_extra_with_card_uids(spool, uid_hex, write_form=DEFAULT_WRITE_FORM):
-    """GET-merge-PATCH body: append the UID to the spool's card_uids LIST.
+def merged_extra_with_card_uids(spool, uid_hexes, write_form=DEFAULT_WRITE_FORM):
+    """GET-merge-PATCH body: append the UIDs to the spool's card_uids LIST.
 
     Spoolman replaces the whole ``extra`` object on PATCH, so every existing extra field is
-    carried through unchanged, and the existing UID list (ours or another app's) is kept; the new
+    carried through unchanged, and the existing UID list (ours or another app's) is kept; each new
     UID is appended only if absent (no duplicates). However the value was spelled, it goes back in
     the canonical UID form and in the configured write form.
     """
     existing = (spool.get("extra") if isinstance(spool, dict) else None) or {}
     merged = dict(existing)
-    uids = spool_card_uids(spool)
-    if uid_hex and not uid_is_bound(uid_hex, uids):
-        uids = uids + [canonical_uid(uid_hex)]
-    merged[CARD_UIDS_FIELD] = encode_card_uids(uids, write_form)
+    merged[CARD_UIDS_FIELD] = encode_card_uids(
+        _with_new_uids(spool_card_uids(spool), uid_hexes), write_form)
     return merged
+
+
+def _with_new_uids(bound_uids, uid_hexes):
+    distinct_uids = dict.fromkeys(canonical_uid(uid_hex) for uid_hex in uid_hexes if uid_hex)
+    return bound_uids + [uid for uid in distinct_uids if not uid_is_bound(uid, bound_uids)]
 
 
 def parse_strategy_chain(text, default=DEFAULT_STRATEGY, known=KNOWN_STRATEGIES):

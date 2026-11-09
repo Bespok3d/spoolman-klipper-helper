@@ -10,7 +10,7 @@ a spool of its own.
 """
 from .active_spool import coerce_spool_id
 from .afc import lane_spool_id
-from .card_uids import tag_uid
+from .card_uids import binding_uids
 from .filament_info import filament_info_to_string, is_untagged_filament
 from .u1_tools import EXTRUDERS_COUNT
 from .unmatched_tag import (
@@ -284,18 +284,19 @@ class SpoolResolution:
 
     # Link spool: the reel on the lane is bound to a spool they picked, and the lane is put on that
     # spool at once, the same act writing the tag onto a spool already performs. The bind alone left
-    # the lane on whatever it was showing until something else resolved it. A UID another spool
-    # already owns is not bound, so that lane is left alone too.
+    # the lane on whatever it was showing until something else resolved it. When another spool
+    # already owns any UID of the reel, nothing is bound and the lane is left alone: binding the
+    # rest would split one reel across two spools.
     def bind_channel_card_uid(self, channel, spool_id):
         if not (0 <= channel < EXTRUDERS_COUNT):
             self.logs.error(f"Channel must be 0..{EXTRUDERS_COUNT - 1}")
             return
         tag = self.holders.spool_holders[channel]
-        uid = tag_uid(tag) if tag else None
-        if not uid:
+        uids = binding_uids(tag) if tag else []
+        if not uids:
             self.logs.warn(f"No stable tag UID on channel {channel} to bind to spool {spool_id}")
             return
-        self.logs.log(f"Binding channel {channel} UID {uid} -> spool {spool_id}")
+        self.logs.log(f"Binding channel {channel} UID {', '.join(uids)} -> spool {spool_id}")
 
         def on_bound(bound, channel=channel, tag=tag):
             if not bound:
@@ -303,4 +304,4 @@ class SpoolResolution:
             tag["SPOOL_ID"] = spool_id
             self._bind_resolved_spool(channel, tag, spool_id)
 
-        self.spoolman.bind_uid(spool_id, uid, on_bound)
+        self.spoolman.bind_uids(spool_id, uids, on_bound)

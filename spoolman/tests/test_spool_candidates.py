@@ -31,6 +31,15 @@ def test_a_spool_of_another_material_is_never_offered():
     assert spool_ids(offered) == [22]
 
 
+def test_a_spool_of_the_tags_article_number_is_offered_first_whatever_its_material():
+    tag_with_article_number = {**TEAL_TAG, "SKU": "acme-silk-teal"}
+    same_article_number = {**spool(23, material="PLA Silk", colour="DC2828"),
+                           "filament": {**spool(23)["filament"], "material": "PLA Silk",
+                                        "color_hex": "DC2828", "article_number": "acme-silk-teal"}}
+    offered = candidate_spools(tag_with_article_number, [spool(22), same_article_number])
+    assert spool_ids(offered) == [23, 22]
+
+
 def test_an_archived_spool_is_never_offered():
     offered = candidate_spools(TEAL_TAG, [spool(31, archived=True), spool(32)])
     assert spool_ids(offered) == [32]

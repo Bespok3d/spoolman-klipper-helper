@@ -1,10 +1,12 @@
 """Which of the user's own Spoolman spools come closest to a tag that matched nothing.
 
 The user is standing at the printer with a spool the helper could not place, so the shortlist has
-to be short and best first: a long unordered list is the same as no list. Material is the one field
-a candidate must share, because a spool of another material is never the one on the tag; vendor,
-colour and filament name then decide the order. An exact colour outranks a colour of the same
-family, so "the same red" comes before "a red".
+to be short and best first: a long unordered list is the same as no list. A spool whose filament
+carries the tag's article number always comes first, whatever its material is called: it is the
+same filament, and with no spool offered the tag would be made into a spool of its own beside it.
+Otherwise material is the one field a candidate must share, because a spool of another material is
+never the one on the tag; vendor, colour and filament name then decide the order. An exact colour
+outranks a colour of the same family, so "the same red" comes before "a red".
 
 Archived spools are dropped here even though `/api/v1/spool` already leaves them out
 (`allow_archived` defaults to false): a spool the user retired is never worth offering, and the
@@ -19,6 +21,9 @@ SAME_FILAMENT_NAME_SCORE = 1
 EXACT_COLOUR_SCORE = 4
 SAME_COLOUR_FAMILY_SCORE = 2
 NO_SCORE = 0
+# Above every other field together, so a spool of the tag's article number always ranks first.
+SAME_ARTICLE_NUMBER_SCORE = (SAME_MATERIAL_SCORE + EXACT_COLOUR_SCORE + SAME_VENDOR_SCORE
+                             + SAME_FILAMENT_NAME_SCORE + 1)
 
 
 def candidate_spools(tag_info, spools):
@@ -40,9 +45,10 @@ def _spool_number(spool):
 
 
 def _match_score(tag_info, spool_info):
+    article_number_score = _field_score(tag_info, spool_info, "SKU", SAME_ARTICLE_NUMBER_SCORE)
     if not _same_value(tag_info, spool_info, "MAIN_TYPE"):
-        return NO_SCORE
-    return (SAME_MATERIAL_SCORE
+        return article_number_score
+    return (article_number_score + SAME_MATERIAL_SCORE
             + _colour_score(tag_info, spool_info)
             + _field_score(tag_info, spool_info, "VENDOR", SAME_VENDOR_SCORE)
             + _field_score(tag_info, spool_info, "SUB_TYPE", SAME_FILAMENT_NAME_SCORE))

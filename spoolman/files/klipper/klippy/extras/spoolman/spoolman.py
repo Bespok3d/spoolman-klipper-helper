@@ -59,6 +59,8 @@ class Spoolman:
         self.register_from_tag = section.register_from_tag
         self._active_spool_epoch = 0
         self._claims_awaiting_bind = {}
+        self._notes_said = set()
+        self._new_rolls_awaiting_spool = {}
 
     def set_active_spool(self, spool_id):
         try:
@@ -202,8 +204,8 @@ class Spoolman:
                 self.logs.verbose(f"Spoolman refused a spool for the tag: {error}")
                 on_registered(None, REGISTER_REFUSED)
                 return
-            self.bind_uid(spool_id, card_uids.tag_uid(filament_info))
             on_registered(spool_id, None, spool)
+            self._bind_claimed_spool(spool_id, card_uids.binding_uids(filament_info))
 
         SpoolmanRequest(self.webhooks, self.logs, on_created).fetch(
             "/api/v1/spool", "", method="POST", body=spool_payload(filament_id))
@@ -251,7 +253,7 @@ class Spoolman:
             if error:
                 on_applied(REGISTER_REFUSED)
                 return
-            self.bind_uid(spool_id, card_uids.tag_uid(filament_info))
+            self.bind_uids(spool_id, card_uids.binding_uids(filament_info))
             on_applied(None)
 
         SpoolmanRequest(self.webhooks, self.logs, on_patched).fetch(
@@ -292,14 +294,14 @@ class Spoolman:
     # went unanswered along the way, because a lane the user must go and fix in Spoolman and a
     # lane that failed because Spoolman is down are two different problems to report.
     def resolve_spool(self, info, callback):
-        uid = card_uids.tag_uid(info)
+        uids = card_uids.binding_uids(info)
         self.logs.verbose(
             f"Resolving spool: vendor->{info.get('VENDOR')}, sku->{info.get('SKU')}, "
-            f"spool_id->{info.get('SPOOL_ID')}, uid->{uid}, chain->{self.strategy_chain}"
+            f"spool_id->{info.get('SPOOL_ID')}, uids->{uids}, chain->{self.strategy_chain}"
         )
-        self._run_strategies(info, uid, list(self.strategy_chain), callback, False)
+        self._run_strategies(info, uids, list(self.strategy_chain), callback, False)
 
-    def _run_strategies(self, info, uid, remaining, callback, spoolman_unanswered):
+    def _run_strategies(self, info, uids, remaining, callback, spoolman_unanswered):
         if not remaining:
             self.logs.verbose("Resolution chain exhausted, no strategy matched this tag")
             callback(None, spoolman_unanswered)
@@ -307,15 +309,15 @@ class Spoolman:
         strategy = remaining[0]
 
         def advance(unanswered=False):
-            self._run_strategies(info, uid, remaining[1:], callback,
+            self._run_strategies(info, uids, remaining[1:], callback,
                                  spoolman_unanswered or unanswered)
 
         if strategy == "spool_id":
             self._resolve_by_spool_id(info, callback, advance)
         elif strategy == "uid":
-            self._resolve_by_uid(uid, callback, advance)
+            self._resolve_by_uid(uids, callback, advance)
         elif strategy == "sku":
-            self._resolve_by_sku(info, uid, callback, advance)
+            self._resolve_by_sku(info, uids, callback, advance)
         else:
             advance()  # decoded_id / manual: no automatic resolver yet
 
@@ -327,8 +329,8 @@ class Spoolman:
         else:
             advance()
 
-    def _resolve_by_uid(self, uid, callback, advance):
-        if not uid:
+    def _resolve_by_uid(self, uids, callback, advance):
+        if not uids:
             advance()
             return
 
@@ -336,16 +338,46 @@ class Spoolman:
             if error:
                 advance(unanswered=True)
                 return
-            spool = card_uids.match_spool_by_card_uid(spools or [], uid)
+            spool = card_uids.match_spool_by_card_uids(spools or [], uids)
             if spool:
-                self.logs.debug(f"Resolved by UID {uid}: spool {spool.get('id')}")
-                callback(spool, False)
+                self._take_spool_bound_to_tag(spool, uids, spools, callback)
             else:
                 advance()
 
         self._fetch_all_spools(on_spools)
 
-    def _resolve_by_sku(self, info, uid, callback, advance):
+    # Found by one UID, the spool is tied to the others as well: the other side's tag then finds it
+    # by the spool identity the two sides share, and a spool bound before that identity was read
+    # picks it up. With auto-bind off nothing is written unless the user asks. The lane gets its
+    # spool first: a write Moonraker cannot take raises, and must not cost the lane its verdict.
+    def _take_spool_bound_to_tag(self, spool, uids, spools, callback):
+        self.logs.debug(f"Resolved by one of UIDs {', '.join(uids)}: spool {spool.get('id')}")
+        callback(spool, False)
+        if self.auto_register:
+            self._tie_spool_to_every_uid(spool, uids, spools)
+
+    # A UID of this reel already on another spool means one reel became two spools in Spoolman
+    # (an older version could do that), which only the user can sort out.
+    def _tie_spool_to_every_uid(self, spool, uids, spools):
+        spool_id = spool.get("id")
+        missing_uids = card_uids.uids_missing_from_spool(spool, uids)
+        if not missing_uids or self._claimed_for_another_spool(missing_uids, spool_id):
+            return
+        conflict = card_uids.uid_bound_elsewhere(spools, missing_uids, spool_id)
+        if conflict is None:
+            self._bind_claimed_spool(spool_id, missing_uids)
+            return
+        _conflicting_uid, owner = conflict
+        self._say_once(
+            ("one reel on two spools", spool_id, owner.get("id")),
+            f"Spools {spool_id} and {owner.get('id')} are the two sides of one reel: archive the "
+            "one you do not keep in Spoolman, and the other takes both sides on the next read")
+
+    # A bind in flight is not in the spools in hand yet, but the UID is already taken.
+    def _claimed_for_another_spool(self, uids, spool_id):
+        return any(self._claims_awaiting_bind.get(uid, spool_id) != spool_id for uid in uids)
+
+    def _resolve_by_sku(self, info, uids, callback, advance):
         sku = info.get("SKU")
         if not sku:
             advance()
@@ -356,87 +388,162 @@ class Spoolman:
                 self.logs.verbose(f"Cannot find spools for sku: {sku}")
                 advance(unanswered=bool(error))
                 return
-            self._spool_of_this_roll(info, uid, filament_spools, callback, advance)
+            self._spool_of_this_roll(info, uids, filament_spools, callback, advance)
 
         self.lookup_spoolman(sku, on_lookup)
 
     # Each physical roll is its own spool. A tag already bound to a spool is that spool whatever
     # the strategy order, so the owner is looked for first; a tag bound to nothing only ever gets a
     # spool no other tag is bound to, never the spool of another roll of the same filament.
-    def _spool_of_this_roll(self, info, uid, filament_spools, callback, advance):
-        if not uid:
-            self._claim_untagged_spool(info, uid, filament_spools, callback, advance)
+    def _spool_of_this_roll(self, info, uids, filament_spools, callback, advance):
+        if not uids:
+            self._claim_untagged_spool(info, uids, filament_spools, callback, advance)
             return
 
         def on_spools(error, spools):
             if error:
                 advance(unanswered=True)
                 return
-            owner = card_uids.match_spool_by_card_uid(spools or [], uid)
+            owner = card_uids.match_spool_by_card_uids(spools or [], uids)
             if owner:
-                self.logs.debug(f"Resolved by UID {uid} in the SKU step: spool {owner.get('id')}")
-                callback(owner, False)
+                self._take_spool_bound_to_tag(owner, uids, spools, callback)
                 return
-            self._claim_untagged_spool(info, uid, filament_spools, callback, advance)
+            self._claim_untagged_spool(info, uids, filament_spools, callback, advance)
 
         self._fetch_all_spools(on_spools)
 
     # A claim only shows in Spoolman once its bind lands. Until then a second lane resolving at the
     # same moment would still see the spool untagged and take it for its own roll, so the claims in
     # flight are kept here, per tag, and the spool goes to one roll only.
-    def _claim_untagged_spool(self, info, uid, filament_spools, callback, advance):
-        own_claim = self._spool_claimed_by(uid, filament_spools)
+    def _claim_untagged_spool(self, info, uids, filament_spools, callback, advance):
+        own_claim = self._spool_claimed_by(uids, filament_spools)
         if own_claim:
             callback(own_claim, False)
             return
         untagged_spool = card_uids.first_untagged_spool(self._unclaimed_spools(filament_spools))
         if not untagged_spool:
-            self._spool_for_new_roll(info, uid, filament_spools, callback, advance)
+            self._spool_for_new_roll(info, uids, filament_spools, callback, advance)
             return
         self.logs.debug(f"Resolved by sku->{info.get('SKU')}: spool {untagged_spool.get('id')}")
-        if self.auto_register and uid:
-            self._bind_claimed_spool(untagged_spool.get("id"), uid)
         callback(untagged_spool, False)
+        if self.auto_register and uids:
+            self._bind_claimed_spool(untagged_spool.get("id"), uids)
+        else:
+            self._say_spool_is_not_tied(untagged_spool.get("id"), info.get("SKU"), uids)
 
-    def _spool_claimed_by(self, uid, filament_spools):
-        claimed_spool_id = self._claims_awaiting_bind.get(uid)
+    # Nothing records which roll took a spool it was not tied to, so the next roll of the same SKU
+    # lands on it too. That cannot be told apart here, so the user is told instead.
+    def _say_spool_is_not_tied(self, spool_id, sku, uids):
+        remedy = (" Link the tag to it with SH_BIND_CARD_UID, or turn on auto-bind, to keep it to "
+                  "this roll.") if uids else ""
+        self._say_once(
+            ("tracked by SKU only", spool_id, tuple(uids)),
+            f"Spool {spool_id} is tracked by SKU {sku} only, so another roll of SKU {sku} would "
+            f"be tracked on it too.{remedy}")
+
+    # A lane resolves again on every tag read and replay, so a standing condition is told once.
+    def _say_once(self, note, message):
+        if note in self._notes_said:
+            return
+        self._notes_said.add(note)
+        self.logs.log(message)
+
+    # A claim can be newer than the spools in hand (a spool made after they were fetched), so the
+    # claimed id answers on its own then; the chain accepts a bare id as well as a spool.
+    def _spool_claimed_by(self, uids, filament_spools):
+        claimed_spool_id = next((self._claims_awaiting_bind[uid] for uid in uids
+                                 if uid in self._claims_awaiting_bind), None)
         if claimed_spool_id is None:
             return None
-        return card_uids.find_spool_by_id(filament_spools, claimed_spool_id)
+        return card_uids.find_spool_by_id(filament_spools, claimed_spool_id) or claimed_spool_id
 
     def _unclaimed_spools(self, filament_spools):
         claimed_spool_ids = set(self._claims_awaiting_bind.values())
         return [spool for spool in filament_spools if spool.get("id") not in claimed_spool_ids]
 
-    def _bind_claimed_spool(self, spool_id, uid):
+    # A later claim of the same UIDs for another spool is that bind's to clear, not this one's.
+    def _uids_still_claimed_for(self, uids, spool_id):
+        return [uid for uid in uids if self._claims_awaiting_bind.get(uid) == spool_id]
+
+    # Callers give the lane its spool before this: a bind Moonraker cannot take raises here.
+    def _bind_claimed_spool(self, spool_id, uids):
         def on_bound(_bound):
-            self._claims_awaiting_bind.pop(uid, None)
+            for uid in self._uids_still_claimed_for(uids, spool_id):
+                self._claims_awaiting_bind.pop(uid)
 
-        self._claims_awaiting_bind[uid] = spool_id
-        self.bind_uid(spool_id, uid, on_bound)
+        self._claims_awaiting_bind.update(dict.fromkeys(uids, spool_id))
+        self.bind_uids(spool_id, uids, on_bound)
 
-    # Every spool of the filament already carries another roll's tag, so this roll gets a spool of
-    # its own through the same path that makes one for a tag Spoolman has never seen. A tag with no
-    # stable UID could not be bound to that spool and would make another one on every insert.
-    def _spool_for_new_roll(self, info, uid, filament_spools, callback, advance):
+    # Every spool of the filament already carries a tag. When this tag and every one of those spools
+    # hold a spool identity both sides share, a tag bound to none of them is a new roll and gets a
+    # spool of its own. Otherwise it may just as well be the other side of one of those spools (a
+    # spool bound before its identity was read holds one side's tag only), so no spool is made: the
+    # lane is left for the user to link, or to add as a new spool, by hand.
+    def _spool_for_new_roll(self, info, uids, filament_spools, callback, advance):
         sku = info.get("SKU")
         filament_id = (filament_spools[0].get("filament") or {}).get("id")
-        if not (uid and self.register_from_tag and filament_id):
+        if not (self.register_from_tag and filament_id):
             self.logs.verbose(f"Every spool for SKU {sku} has another roll's tag, none is this one")
             advance()
             return
+        if not (card_uids.spool_uid(info) and self._every_spool_holds_identity(filament_spools)):
+            self._say_no_spool_for_unidentified_roll(sku, uids)
+            advance()
+            return
+        self._create_spool_for_new_roll(info, filament_id, callback, advance)
+
+    def _every_spool_holds_identity(self, filament_spools):
+        return all(card_uids.holds_spool_identity(self._uids_of_spool(spool))
+                   for spool in filament_spools)
+
+    # A spool made a moment ago holds its UIDs in the claim until its bind lands in Spoolman.
+    def _uids_of_spool(self, spool):
+        claimed_uids = [uid for uid, claimed_spool_id in self._claims_awaiting_bind.items()
+                        if claimed_spool_id == spool.get("id")]
+        return card_uids.spool_card_uids(spool) + claimed_uids
+
+    def _say_no_spool_for_unidentified_roll(self, sku, uids):
+        if not uids:
+            self.logs.verbose(f"Every spool for SKU {sku} has another roll's tag, and this tag has "
+                              "no stable UID to tie a new spool to")
+            return
+        self._say_once(
+            ("no spool for unidentified roll", tuple(uids)),
+            f"Every spool for SKU {sku} already has a tag, and this tag may be the other side of "
+            f"one of them, so no spool is made for it. Link it to its spool with "
+            f"SH_BIND_CARD_UID, or add it in Spoolman as a new spool")
+
+    # A roll can resolve again before its new spool lands in Spoolman (a tag read and a replay at
+    # the same moment), so that resolution waits for the one spool instead of making a second.
+    def _create_spool_for_new_roll(self, info, filament_id, callback, advance):
+        roll_identity = card_uids.spool_uid(info)
+        creation_in_flight = roll_identity in self._new_rolls_awaiting_spool
+        self._new_rolls_awaiting_spool.setdefault(roll_identity, []).append((callback, advance))
+        if creation_in_flight:
+            return
 
         def on_registered(spool_id, problem, new_spool=None):
-            if problem:
-                self.logs.warn(f"Spoolman did not make a spool for this new roll of SKU {sku}")
-                advance()
-                return
-            self.logs.log(
-                f"Every spool for SKU {sku} has another roll's tag, so this roll is now "
-                f"Spoolman spool {spool_id}")
-            callback(new_spool, False)
+            waiting_resolutions = self._new_rolls_awaiting_spool.pop(roll_identity, [])
+            self._report_new_roll_spool(info.get("SKU"), spool_id, problem)
+            for on_resolved, advance_resolution in waiting_resolutions:
+                self._finish_new_roll_resolution(
+                    new_spool, problem, on_resolved, advance_resolution)
 
         self._create_spool(info, filament_id, on_registered)
+
+    def _report_new_roll_spool(self, sku, spool_id, problem):
+        if problem:
+            self.logs.warn(f"Spoolman did not make a spool for this new roll of SKU {sku}")
+            return
+        self.logs.log(
+            f"Every spool for SKU {sku} has another roll's tag, so this roll is now "
+            f"Spoolman spool {spool_id}")
+
+    def _finish_new_roll_resolution(self, new_spool, problem, on_resolved, advance):
+        if problem:
+            advance()
+            return
+        on_resolved(new_spool, False)
 
     def define_card_uids_field(self):
         def on_done(error, payload):
@@ -446,8 +553,8 @@ class Spoolman:
             f"/api/v1/field/spool/{card_uids.CARD_UIDS_FIELD}", "",
             method="POST", body=card_uids.card_uids_field_definition())
 
-    def bind_uid(self, spool_id, uid, on_done=None):
-        if not uid:
+    def bind_uids(self, spool_id, uids, on_done=None):
+        if not uids:
             self.logs.warn("Refusing to bind an empty or non-stable UID")
             if on_done:
                 on_done(False)
@@ -457,7 +564,7 @@ class Spoolman:
             if error:
                 self._report_failed_bind(spool_id, error, on_done)
                 return
-            self._bind_unless_assigned(spool_id, uid, spools or [], on_done)
+            self._bind_unless_assigned(spool_id, uids, spools or [], on_done)
 
         self._fetch_all_spools(on_spools)
 
@@ -468,25 +575,32 @@ class Spoolman:
         if on_done:
             on_done(False)
 
-    def _bind_unless_assigned(self, spool_id, uid, spools, on_done):
-        owner = card_uids.match_spool_by_card_uid(spools, uid)
-        if owner is not None:
-            owner_id = owner.get("id")
-            self.logs.log(f"UID {uid} already assigned to spool {owner_id}, not re-binding")
+    def _bind_unless_assigned(self, spool_id, uids, spools, on_done):
+        conflict = card_uids.uid_bound_elsewhere(spools, uids, spool_id)
+        if conflict is not None:
+            conflicting_uid, owner = conflict
+            self.logs.log(f"UID {conflicting_uid} already assigned to spool {owner.get('id')}, "
+                          "not re-binding")
             if on_done:
-                on_done(owner_id == spool_id)
+                on_done(False)
             return
         target = card_uids.find_spool_by_id(spools, spool_id) or {}
-        self._patch_card_uids(spool_id, uid, target, on_done)
+        missing_uids = card_uids.uids_missing_from_spool(target, uids)
+        if not missing_uids:
+            self.logs.debug(f"UID {', '.join(uids)} already bound to spool {spool_id}")
+            if on_done:
+                on_done(True)
+            return
+        self._patch_card_uids(spool_id, missing_uids, target, on_done)
 
-    def _patch_card_uids(self, spool_id, uid, spool, on_done):
-        extra = card_uids.merged_extra_with_card_uids(spool, uid, self.write_form)
+    def _patch_card_uids(self, spool_id, uids, spool, on_done):
+        extra = card_uids.merged_extra_with_card_uids(spool, uids, self.write_form)
 
         def on_patched(error, payload):
             if error:
                 self.logs.log(f"Bind failed for spool {spool_id}: {error}")
             else:
-                self.logs.log(f"Bound UID {uid} -> spool {spool_id}")
+                self.logs.log(f"Bound UID {', '.join(uids)} -> spool {spool_id}")
             if on_done:
                 on_done(not error)
 

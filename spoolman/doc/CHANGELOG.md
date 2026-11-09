@@ -9,10 +9,22 @@
   tag missed a filament saved as `SM-PLA`, while making a new spool already ignored the case.
 - Fix: a second roll of a filament is now tracked as its own spool. Before, it could be tracked as
   the first roll's spool, so both rolls used up one spool in Spoolman. Now it takes a spool of that
-  filament that has no tag yet, or gets a new spool with its tag tied to it. Two new rolls loaded at
-  the same moment no longer both take the same spool either.
-  Heads-up: a spool with a tag on each side becomes two spools the first time you load it the other
-  way round. Delete the extra spool in Spoolman, then link that tag to the first spool.
+  filament that has no tag yet. Two new rolls loaded at the same moment no longer both take the
+  same spool either.
+- When every spool of that filament already has a tag, a Bambu spool gets a new spool of its own,
+  and both its tags are tied to it, so it stays one spool whichever way round you load it. Other
+  tags cannot tell a new roll from the other side of a spool you already have, so no spool is made:
+  the console says so, and you link the tag or add the spool by hand. Bambu spools need Bambu
+  Filament Tag 0.2.2 or newer for this.
+- A Bambu spool an older version tied to one of its tags never gets a second spool when you load it
+  the other way round: the console says so instead. Load it once the way round it was first linked,
+  with auto-bind on, or link the other tag by hand, and from then on either side finds it. Until
+  then, a new Bambu roll of that same filament gets no spool made either.
+- If an older version already made two spools out of one Bambu spool, the console names both, so you
+  can archive the one you do not keep in Spoolman. With auto-bind on, the other then takes both
+  sides on the next read.
+- With auto-bind off, the console now says when a spool was found by its article number only, since
+  another roll of the same filament would then be tracked on that same spool.
 - Fix: writing a tag onto a spool you picked no longer puts its article number on a second
   filament. If another filament already has that number, nothing is written and the console says
   how to sort it out.

@@ -13,19 +13,25 @@ from card_uids import (
     CARD_UIDS_FIELD,
     COMMA_SEPARATED_WRITE_FORM,
     DEFAULT_STRATEGY,
+    binding_uids,
     canonical_uid,
     card_uids_field_definition,
     encode_card_uids,
     find_spool_by_id,
+    holds_spool_identity,
     is_random_uid,
     match_spool_by_card_uid,
+    match_spool_by_card_uids,
     merged_extra_with_card_uids,
     normalize_uid,
     parse_strategy_chain,
     parse_write_form,
     spool_card_uids,
     spool_has_card_uid,
+    spool_uid,
     trackable_uid,
+    uid_bound_elsewhere,
+    uids_missing_from_spool,
 )
 
 GENUINE_UID = [0x04, 0xA1, 0xB2, 0xC3]
@@ -124,19 +130,19 @@ def test_punctuated_uids_are_still_told_apart():
 
 def test_a_punctuated_binding_is_rewritten_canonical_not_duplicated():
     spool = _spool(7, {CARD_UIDS_FIELD: json.dumps("04:A1:B2:C3")})
-    merged = merged_extra_with_card_uids(spool, GENUINE_HEX)
+    merged = merged_extra_with_card_uids(spool, [GENUINE_HEX])
     assert json.loads(json.loads(merged[CARD_UIDS_FIELD])) == [GENUINE_HEX]
 
 
 def test_write_form_default_is_the_array():
     spool = _spool(7, {CARD_UIDS_FIELD: _wire([GENUINE_HEX])})
-    merged = merged_extra_with_card_uids(spool, "deadbeef")
+    merged = merged_extra_with_card_uids(spool, ["deadbeef"])
     assert merged[CARD_UIDS_FIELD] == _wire([GENUINE_HEX, "deadbeef"])
 
 
 def test_comma_separated_write_form_is_flat_and_still_reads_back():
     spool = _spool(7, {CARD_UIDS_FIELD: _wire([GENUINE_HEX])})
-    merged = merged_extra_with_card_uids(spool, "deadbeef", COMMA_SEPARATED_WRITE_FORM)
+    merged = merged_extra_with_card_uids(spool, ["deadbeef"], COMMA_SEPARATED_WRITE_FORM)
     assert merged[CARD_UIDS_FIELD] == json.dumps(f"{GENUINE_HEX},deadbeef")
     assert spool_card_uids(_spool(7, merged)) == [GENUINE_HEX, "deadbeef"]
 
@@ -150,7 +156,7 @@ def test_unknown_write_form_writes_the_array():
 
 def test_merged_extra_does_not_append_an_uppercase_duplicate():
     spool = _spool(7, {CARD_UIDS_FIELD: json.dumps("AABBCCDD")})
-    merged = merged_extra_with_card_uids(spool, "aabbccdd")
+    merged = merged_extra_with_card_uids(spool, ["aabbccdd"])
     assert json.loads(json.loads(merged[CARD_UIDS_FIELD])) == ["aabbccdd"]
 
 
@@ -182,7 +188,7 @@ def test_find_spool_by_id():
 
 def test_merged_extra_preserves_other_fields():
     spool = _spool(5, {"price": json.dumps(25), "lot_nr": json.dumps("L42")})
-    merged = merged_extra_with_card_uids(spool, GENUINE_HEX)
+    merged = merged_extra_with_card_uids(spool, [GENUINE_HEX])
     # other extras carried through unchanged (Spoolman replaces the whole extra object)
     assert merged["price"] == json.dumps(25)
     assert merged["lot_nr"] == json.dumps("L42")
@@ -194,31 +200,89 @@ def test_merged_extra_preserves_other_fields():
 
 def test_merged_extra_value_passes_spoolman_text_validation():
     # Spoolman's validate_extra_field_value: json.loads(value) must be a str, else 400.
-    merged = merged_extra_with_card_uids({"id": 5}, GENUINE_HEX)
+    merged = merged_extra_with_card_uids({"id": 5}, [GENUINE_HEX])
     assert isinstance(json.loads(merged[CARD_UIDS_FIELD]), str)
 
 
 def test_merged_extra_appends_second_tag():
     spool = _spool(5, {CARD_UIDS_FIELD: _wire([OTHER_SIDE_HEX])})
-    merged = merged_extra_with_card_uids(spool, GENUINE_HEX)
+    merged = merged_extra_with_card_uids(spool, [GENUINE_HEX])
     assert merged[CARD_UIDS_FIELD] == _wire([OTHER_SIDE_HEX, GENUINE_HEX])
 
 
 def test_merged_extra_migrates_legacy_single_encoded_value():
     spool = _spool(5, {CARD_UIDS_FIELD: json.dumps([OTHER_SIDE_HEX])})
-    merged = merged_extra_with_card_uids(spool, GENUINE_HEX)
+    merged = merged_extra_with_card_uids(spool, [GENUINE_HEX])
     assert merged[CARD_UIDS_FIELD] == _wire([OTHER_SIDE_HEX, GENUINE_HEX])
 
 
 def test_merged_extra_does_not_append_duplicate():
     spool = _spool(5, {CARD_UIDS_FIELD: _wire([GENUINE_HEX])})
-    merged = merged_extra_with_card_uids(spool, GENUINE_HEX)
+    merged = merged_extra_with_card_uids(spool, [GENUINE_HEX])
     assert merged[CARD_UIDS_FIELD] == _wire([GENUINE_HEX])  # no duplicate appended
 
 
 def test_merged_extra_handles_missing_extra():
-    merged = merged_extra_with_card_uids({"id": 5}, GENUINE_HEX)
+    merged = merged_extra_with_card_uids({"id": 5}, [GENUINE_HEX])
     assert merged == {CARD_UIDS_FIELD: _wire([GENUINE_HEX])}
+
+
+TRAY_UID_BYTES = list(range(0x60, 0x70))
+TRAY_UID_HEX = "606162636465666768696a6b6c6d6e6f"
+
+
+def test_a_tag_binds_its_own_uid_then_the_spool_identity_both_sides_share():
+    tag = {"CARD_UID": [0x04, 0xA1, 0xB2, 0xC3], "SPOOL_UID": TRAY_UID_BYTES}
+    assert spool_uid(tag) == TRAY_UID_HEX
+    assert binding_uids(tag) == [GENUINE_HEX, TRAY_UID_HEX]
+
+
+def test_a_format_with_no_spool_identity_binds_only_the_tags_own_uid():
+    assert spool_uid({"CARD_UID": [0x04, 0xA1, 0xB2, 0xC3]}) is None
+    assert spool_uid({"SPOOL_UID": [0] * 16}) is None
+    assert binding_uids({"CARD_UID": [0x04, 0xA1, 0xB2, 0xC3]}) == [GENUINE_HEX]
+    assert binding_uids({"CARD_UID": [0x08, 0x5B, 0x2C, 0x71]}) == []
+
+
+def test_a_spool_uid_that_is_not_sixteen_bytes_is_never_taken_as_a_spool_identity():
+    assert spool_uid({"SPOOL_UID": TRAY_UID_BYTES[:7]}) is None
+    assert spool_uid({"SPOOL_UID": TRAY_UID_BYTES + [0x70]}) is None
+
+
+def test_only_a_bound_spool_identity_lets_either_side_find_the_spool():
+    seven_byte_tag_uid_hex = "04a1b2c3d4e5f6"
+    assert holds_spool_identity([GENUINE_HEX, TRAY_UID_HEX.upper()])
+    assert not holds_spool_identity([GENUINE_HEX, seven_byte_tag_uid_hex])
+    assert not holds_spool_identity([])
+
+
+def test_the_spool_bound_to_either_uid_is_found():
+    spools = [_spool(10, {CARD_UIDS_FIELD: _wire(["deadbeef"])}),
+              _spool(20, {CARD_UIDS_FIELD: _wire([TRAY_UID_HEX])})]
+    assert match_spool_by_card_uids(spools, ["cafebabe", TRAY_UID_HEX])["id"] == 20
+    assert match_spool_by_card_uids(spools, ["cafebabe"]) is None
+    assert match_spool_by_card_uids(spools, []) is None
+
+
+def test_a_uid_another_spool_owns_is_reported_and_the_target_itself_is_not():
+    spools = [_spool(10, {CARD_UIDS_FIELD: _wire([GENUINE_HEX])}),
+              _spool(20, {CARD_UIDS_FIELD: _wire([TRAY_UID_HEX])})]
+    assert uid_bound_elsewhere(spools, [GENUINE_HEX, TRAY_UID_HEX], 10) == (TRAY_UID_HEX,
+                                                                            spools[1])
+    assert uid_bound_elsewhere(spools, [GENUINE_HEX], 10) is None
+    assert uid_bound_elsewhere(spools, ["cafebabe"], 10) is None
+
+
+def test_only_the_uids_a_spool_lacks_are_missing_from_it():
+    spool = _spool(10, {CARD_UIDS_FIELD: _wire([GENUINE_HEX])})
+    assert uids_missing_from_spool(spool, [GENUINE_HEX, TRAY_UID_HEX]) == [TRAY_UID_HEX]
+    assert uids_missing_from_spool(spool, [GENUINE_HEX]) == []
+
+
+def test_merged_extra_appends_several_uids_once_each():
+    spool = _spool(5, {CARD_UIDS_FIELD: _wire([OTHER_SIDE_HEX])})
+    merged = merged_extra_with_card_uids(spool, [GENUINE_HEX, "04A1B2C3", TRAY_UID_HEX])
+    assert merged[CARD_UIDS_FIELD] == _wire([OTHER_SIDE_HEX, GENUINE_HEX, TRAY_UID_HEX])
 
 
 def test_field_definition_shape():

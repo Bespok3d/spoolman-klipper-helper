@@ -31,7 +31,8 @@ reads), with zero patches to Klipper or Moonraker.
 
 - It does not write your tags. (It can bind a tag's UID to a _Spoolman spool_, which writes a
   field on the spool in Spoolman, but it never alters the tag itself.)
-- It does not invent `spool_id`s: a spool must already exist in your Spoolman instance.
+- It does not invent `spool_id`s: every spool it tracks is a spool in your Spoolman, one you made
+  or one it made there from a tag (`register_from_tag`).
 
 ## Requirements
 
@@ -102,14 +103,18 @@ additive and de-duplicated, and a spool's other fields are preserved. Re-randomi
 (DESFire) are never used as a key.
 
 - **One roll, one spool:** a tag found by SKU is only ever given a spool of that filament that has
-  no tag yet. When every spool of that filament already has a tag, the roll is a new one: a spool
-  is made for it and its tag is tied to it (needs `register_from_tag`, on by default, and a tag
-  with a stable UID; otherwise the lane stays untracked). A spool with a tag on each side becomes
-  two spools the first time you load it the other way round: delete the extra spool in Spoolman,
-  then link that tag to the first spool.
+  no tag yet. When every spool of that filament already has a tag, only a tag that names its spool
+  on both sides (Bambu) is known to be a new roll: a spool is made for it and both its tags are
+  tied to it, so it is one spool whichever way round you load it (needs `register_from_tag`, on by
+  default). Any other tag may be the other side of a spool you already have, so no spool is made:
+  the console says so, and you link it with `SH_BIND_CARD_UID` or add the spool by hand. The same
+  goes for a Bambu tag while one of those spools was linked by only one of its tags (before 0.1.39).
 - **Auto-bind** (off by default): turn on **Auto-bind tag UID on SKU match** and the first time a
   spool with no tag yet is resolved by SKU, the current tag UID is written onto it, so the next tap
-  is a direct UID match. With it off, UIDs are only bound when you ask or when a spool is made.
+  is a direct UID match. A spool found by one tag also gets any of that tag's UIDs it is missing,
+  so a Bambu spool linked by one side learns the other. With it off, UIDs are only bound when you
+  ask or when a spool is made, and the console says when a spool was found by SKU alone, since
+  another roll of the same SKU would then be tracked on that same spool.
 - **Manual bind:** run `SH_BIND_CARD_UID CHANNEL={0..3} SPOOL=<id>` to bind the tag currently on a
   lane to a specific Spoolman spool. Handy to recover from a miss, or to register a tag up front.
 
@@ -354,11 +359,12 @@ writes the tag onto a spool you pick, **link spool** ties the tag to one, and **
 new one. What follows is what happens on the console, and the commands the buttons send.
 
 When it matches nothing, the console says so and then lists what your Spoolman does hold that looks
-like the tag, five at most: only spools of the same material are offered, and the same brand and the
-same colour are what put one at the top of the list. Archived spools are never offered. If one of
-them is the spool in your hand, tell
-the printer so, with `SH_APPLY_TAG_TO_SPOOL CHANNEL={0..3} SPOOL=<id>`: what the card says is written
-onto that spool and the card is bound to it, so the next tap lands straight on it.
+like the tag, five at most. A spool whose filament has the tag's article number always comes first,
+whatever its material is called. Otherwise only spools of the same material are offered, and the
+same brand and the same colour are what put one at the top of the list. Archived spools are never
+offered. If one of them is the spool in your hand, tell the printer so, with
+`SH_APPLY_TAG_TO_SPOOL CHANNEL={0..3} SPOOL=<id>`: what the card says is written onto that spool and
+the card is bound to it, so the next tap lands straight on it.
 
 If nothing of yours came close, the spool is made for you. The bridge creates it in Spoolman from
 what the card carries (brand, material, sub-type, colour, article number) and binds the card to it,
