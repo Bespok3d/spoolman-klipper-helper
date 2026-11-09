@@ -531,6 +531,17 @@ def test_more_colours_than_the_firmware_holds_are_capped_at_five():
     assert args["COLORS"] == "111111,222222,333333,444444,555555"
 
 
+def test_a_one_colour_list_with_no_color_hex_still_writes_that_colour():
+    # Before, only color_hex was read for a single colour, so this spool was written with none.
+    one_listed_colour = {
+        **MULTI_COLOUR_SPOOL,
+        "filament": {**MULTI_COLOUR_SPOOL["filament"], "multi_color_hexes": "30d68b"},
+    }
+    args = filament_config_args_from_spool(one_listed_colour, 3)
+    assert args["FILAMENT_COLOR_RGBA"] == "30D68BFF"
+    assert "COLOR_NUMS" not in args
+
+
 def multi_colour_task_config(colours, alpha=255):
     task = empty_task_config()
     task["filament_vendor"][3] = "Eryone"

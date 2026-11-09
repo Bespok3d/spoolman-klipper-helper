@@ -22,6 +22,7 @@ import re
 from .carrier_watch import ACTIVE_PRINT_STATES, print_state
 from .spool_colours import (
     FIRMWARE_COLOURS_SEPARATOR,
+    colours_in_spoolman,
     multi_colour_args,
     tag_describing_spool,
 )
@@ -185,12 +186,21 @@ def _slicer_filament_fields(spool, subtype_sources):
     return (vendor, material, subtype_for_slicers(spool, subtype_sources))
 
 
+# color_hex comes first because it may carry an alpha; a filament that files its one colour
+# in the multi colour list instead still gets that colour.
+def _single_colour_hex(spool):
+    color_hex = _filament_record(spool).get("color_hex")
+    if color_hex:
+        return color_hex
+    return next(iter(colours_in_spoolman(spool)), "")
+
+
 # tag_info is the tag on the lane when it describes this same spool; its colours win when it
 # names more of them than the Spoolman record does.
 def filament_config_args_from_spool(
     spool, physical_extruder, subtype_sources=DEFAULT_SUBTYPE_SOURCES, tag_info=None
 ):
-    color = normalize_color_rgba(_filament_record(spool).get("color_hex") or "")
+    color = normalize_color_rgba(_single_colour_hex(spool))
     multi_colour = multi_colour_args(spool, tag_info)
     fields = _slicer_filament_fields(spool, subtype_sources)
     args = {"CONFIG_EXTRUDER": str(physical_extruder)}

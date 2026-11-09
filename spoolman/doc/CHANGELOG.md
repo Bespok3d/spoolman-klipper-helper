@@ -8,6 +8,8 @@
 - Fix: when the tag and Spoolman describe the same spool, the one with more colours wins. A tag with
   three colours is no longer flattened to the single colour Spoolman holds, and a Spoolman spool
   with four colours is no longer flattened by a tag that holds one.
+- Fix: a filament whose only colour sits in Spoolman's colour list, with no single colour set,
+  now reaches the printer with that colour instead of none.
 - Note: the printer's colour mode for multi colour spools is always sent as its default, because
   what the other modes mean is not known yet.
 
