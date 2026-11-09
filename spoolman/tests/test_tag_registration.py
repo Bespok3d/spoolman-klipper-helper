@@ -4,6 +4,8 @@
 The payload rules are asserted on the pure leaf; the order of the calls and what is never sent are
 asserted through a fake Spoolman that answers the way the Moonraker proxy does.
 """
+import json
+
 from klipper_fakes import (
     FakePrinter,
     RecordingLogs,
@@ -11,6 +13,7 @@ from klipper_fakes import (
     drain_timers,
     helper_options,
 )
+from spoolman import card_uids
 from spoolman.spoolman import Spoolman
 from spoolman.tag_registration import (
     card_details_payload,
@@ -24,11 +27,12 @@ from spoolman.unmatched_tag import (
     REGISTER_DISABLED,
     REGISTER_REFUSED,
     REGISTER_SHARED_ARTICLE_NUMBER,
+    REGISTER_TAG_ON_ANOTHER_SPOOL,
     REGISTER_UNMEASURED_MATERIAL,
     REGISTER_UNREACHABLE,
     registration_problem_message,
 )
-from test_spool_resolution import SpoolmanCreatesWebhooks
+from test_spool_resolution import SpoolmanCreatesWebhooks, SpoolmanHoldsAnswersWebhooks
 
 TAG = {
     "VENDOR": "ELEGOO", "MAIN_TYPE": "PLA", "SUB_TYPE": "Matte",
@@ -250,6 +254,46 @@ def test_an_article_number_another_filament_has_is_never_written_onto_a_second_o
     assert applied == [REGISTER_ARTICLE_NUMBER_TAKEN]
     assert webhooks.written == []
     assert "channel 2" in registration_problem_message(2, REGISTER_ARTICLE_NUMBER_TAKEN, TAG)
+
+
+SPOOL_HOLDING_THE_TAG = {"id": 55, "filament": {"id": 12},
+                         "extra": {card_uids.CARD_UIDS_FIELD: json.dumps(json.dumps(["04112233"]))}}
+
+
+def test_a_tag_tied_to_another_spool_is_never_written_onto_the_picked_one():
+    logs = RecordingLogs()
+    applied, webhooks = apply_tag([{"id": 104, "filament": {"id": 12}}, SPOOL_HOLDING_THE_TAG],
+                                  logs=logs)
+    assert applied == [REGISTER_TAG_ON_ANOTHER_SPOOL]
+    assert webhooks.written == []
+    assert any("UID 04112233 already assigned to spool 55" in line for line in logs.lines)
+    assert "channel 2" in registration_problem_message(2, REGISTER_TAG_ON_ANOTHER_SPOOL, TAG)
+
+
+def test_a_tag_tied_to_another_spool_is_never_added_as_a_new_spool():
+    inventory = {**THEIR_INVENTORY, ("/api/v1/spool", ""): [SPOOL_HOLDING_THE_TAG]}
+    outcomes, webhooks = register_tag(inventory, asked_by_hand=True)
+    assert outcomes == [(None, REGISTER_TAG_ON_ANOTHER_SPOOL)]
+    assert webhooks.written == []
+
+
+def add_spool_by_hand(spoolman, outcomes):
+    spoolman.register_tag_as_spool(
+        TAG, lambda spool_id, problem, new_spool=None: outcomes.append((spool_id, problem)),
+        asked_by_hand=True)
+
+
+def test_a_tag_added_twice_before_its_first_spool_is_bound_gets_one_spool():
+    printer = FakePrinter()
+    webhooks = SpoolmanHoldsAnswersWebhooks(
+        printer, THEIR_INVENTORY, {("PATCH", "/api/v1/spool/902", "")})
+    printer.objects["webhooks"] = webhooks
+    spoolman = Spoolman(printer, RecordingLogs(), helper_options())
+    outcomes = []
+    add_spool_by_hand(spoolman, outcomes)
+    add_spool_by_hand(spoolman, outcomes)
+    assert outcomes == [(902, None), (None, REGISTER_TAG_ON_ANOTHER_SPOOL)]
+    assert created_paths(webhooks) == ["/api/v1/filament", "/api/v1/spool"]
 
 
 def test_writing_onto_a_spool_that_is_not_theirs_changes_nothing():

@@ -32,6 +32,10 @@
   written. Before, Spoolman could get a changed number and miss the filament.
 - Fix: when Spoolman does not answer while a tag is being tied to a spool, the spool is left as it
   was. Before, its other extra fields could be wiped.
+- Fix: tying a tag to an archived spool no longer wipes that spool's other extra fields.
+- Fix: a tag already tied to one of your spools is no longer written onto another spool you
+  picked, and no new spool is made from it by hand. The tag stays on its spool and the console
+  says so. To move it, clear that spool's `card_uids` field in Spoolman first.
 
 ## 0.1.38
 

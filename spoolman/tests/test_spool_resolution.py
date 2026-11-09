@@ -637,6 +637,9 @@ class FakeWebRequest:
         self.sent.append(response)
 
 
+SPOOL_READ_PATH = "/api/v1/spool/"
+
+
 class SpoolmanServerWebhooks(RecordingWebhooks):
     """A webhooks that answers a spoolman_proxy call the way the Moonraker proxy would."""
 
@@ -651,8 +654,21 @@ class SpoolmanServerWebhooks(RecordingWebhooks):
             return
         request = (params["path"], params["query"])
         self.requested.append(request)
-        payload = self.spools_by_request.get(request, [])
+        payload = (self.spools_by_request[request] if request in self.spools_by_request
+                   else self._spool_read_by_id(params["path"]))
         self.endpoints[params["cb_endpoint"]](FakeWebRequest(params["cb_endpoint"], payload))
+
+    # Spoolman hands back any spool read by its id, archived or left out of a fixture's list.
+    def _spool_read_by_id(self, path):
+        spool_id = path.removeprefix(SPOOL_READ_PATH)
+        if spool_id == path:
+            return []
+        return next((spool for spool in self.known_spools() if str(spool.get("id")) == spool_id),
+                    [])
+
+    def known_spools(self):
+        return [record for answer in self.spools_by_request.values() if isinstance(answer, list)
+                for record in answer]
 
 
 class SpoolmanCreatesWebhooks(SpoolmanServerWebhooks):
@@ -662,6 +678,7 @@ class SpoolmanCreatesWebhooks(SpoolmanServerWebhooks):
         super().__init__(printer, spools_by_request)
         self.written = []
         self.refuses = refuses
+        self.created_spools = []
 
     def call_remote_method(self, method, **params):
         if params.get("request_method", "GET") == "GET":
@@ -675,7 +692,15 @@ class SpoolmanCreatesWebhooks(SpoolmanServerWebhooks):
         )
 
     def _created(self, path):
-        return {} if path in self.refuses else {"id": 900 + len(self.written)}
+        if path in self.refuses:
+            return {}
+        record = {"id": 900 + len(self.written)}
+        if path == "/api/v1/spool":
+            self.created_spools.append(record)
+        return record
+
+    def known_spools(self):
+        return super().known_spools() + self.created_spools
 
 
 class SpoolmanHoldsAnswersWebhooks(SpoolmanCreatesWebhooks):
@@ -1169,6 +1194,29 @@ def test_a_refused_bind_names_only_the_uid_another_spool_holds():
     assert any(f"UID {TRAY_UID_HEX} already assigned to spool 79" in line
                for line in logs.lines)
     assert not [line for line in logs.lines if "04112233" in line and "assigned" in line]
+
+
+def test_binding_an_archived_spool_keeps_its_other_extra_fields():
+    archived_spool = {"id": 32, "archived": True, "extra": {"variant": '"Silk"'}}
+    webhooks = SpoolmanCreatesWebhooks(FakePrinter(), {
+        ("/api/v1/spool", ""): [FIRST_ROLL_SPOOL],
+        ("/api/v1/spool/32", ""): archived_spool,
+    })
+    outcomes = []
+    spoolman_on(webhooks).bind_uids(32, ["04112233"], outcomes.append)
+    assert outcomes == [True]
+    method, path, body = webhooks.written[0]
+    assert (method, path) == ("PATCH", "/api/v1/spool/32")
+    assert body["extra"]["variant"] == '"Silk"', "the bind must not wipe the archived extra"
+    assert "04112233" in body["extra"][card_uids.CARD_UIDS_FIELD]
+
+
+def test_a_spool_spoolman_cannot_hand_back_is_left_unbound():
+    webhooks = SpoolmanCreatesWebhooks(FakePrinter(), {("/api/v1/spool", ""): []})
+    outcomes = []
+    spoolman_on(webhooks).bind_uids(32, ["04112233"], outcomes.append)
+    assert outcomes == [False]
+    assert webhooks.written == []
 
 
 NEW_ROLL_SPOOL = {"id": 901, "filament": {"id": 9}}
