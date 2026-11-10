@@ -10,6 +10,15 @@
   with four colours is no longer flattened by a tag that holds one.
 - Fix: a filament whose only colour sits in Spoolman's colour list, with no single colour set,
   now reaches the printer with that colour instead of none.
+- Fix: a tagged spool with more colours in Spoolman than on its tag now shows them all on the
+  screen even with "Spoolman pick overrides a tagged lane" off. The lane then takes the brand,
+  material and sub-type from Spoolman too. The printer goes back to the tag's colours each time it
+  reads the tag, and the helper puts Spoolman's back once no print is running.
+- Fix: a spool made or updated from a multi colour tag now keeps all the tag's colours in
+  Spoolman. Before, only the first colour was saved. Spoolman needs a colour direction for these,
+  and the tag does not say which, so a new one is saved as coaxial; a direction you already set
+  in Spoolman is kept. A one colour tag written onto a multi colour filament now replaces its
+  colours instead of leaving the old ones showing.
 - The printer's colour mode for multi colour spools is always left at its default for now, because
   what the other modes mean is not known yet.
 - A filament with Starlight or Rainbow in its name now gets that sub-type on the printer. Both are

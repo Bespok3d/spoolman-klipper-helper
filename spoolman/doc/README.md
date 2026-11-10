@@ -171,7 +171,10 @@ every behavior below.
   resolved Spoolman spool back into the print task in-process, using the firmware's own
   `SET_PRINT_FILAMENT_CONFIG` command (no patches, persisted like a screen edit). A tagged lane
   is included in that write only when **Spoolman pick overrides a tagged lane** is on; off, the
-  firmware keeps what the tag filed.
+  firmware keeps what the tag filed, unless the tag's own Spoolman spool has more colours than
+  the tag holds. Then the Spoolman spool is written (its brand, material and sub-type with its
+  colours), so a dual colour spool on a one colour tag still shows both colours. The firmware
+  files the tag's colours again each time it reads the tag, so the write repeats after every read.
 - **Multi colour spools** (silk dual or tri colour, coaxial, gradient) are written with all their
   colours, up to the five the printer holds. When the tag and Spoolman describe the same spool,
   the one naming more colours wins, so neither side flattens the other to a single colour. The
@@ -187,7 +190,9 @@ Each line is: **what you have** then how the name behaves, then how color/materi
 - **RFID-tagged spool:** name from the tag's Spoolman spool, so the AFC card already shows brand,
   material and sub-type. Color/material stay what the firmware filed from the tag, unless
   **Spoolman pick overrides a tagged lane** is on, in which case the Spoolman record is written
-  there too (that is what Snapmaker Orca reads).
+  there too (that is what Snapmaker Orca reads). With it off, the Spoolman record is still
+  written when that spool has more colours in Spoolman than the tag holds, after each read of
+  the tag, and only while no print is running.
 - **Untagged, set on the screen:** no name (there is no spool); color/material come from the screen.
 - **Untagged, picked in Spoolman:** name shows live from the pick; the bridge writes color/material
   so the screen and AFC agree, and makes the picked spool the active/tracked spool. `DETECT_SPOOLS`
@@ -213,7 +218,8 @@ Each line is: **what you have** then how the name behaves, then how color/materi
   is on. On, it sends `FORCE=1` so the firmware accepts the Spoolman brand, material and sub-type
   on a tagged lane (without that flag it raises `official filament, not configurable`). Off, the
   tag stays the source of truth for color, material and sub-type; the AFC name still comes from
-  Spoolman.
+  Spoolman. The one exception: when the tag's own Spoolman spool has more colours than the tag,
+  that spool is written with `FORCE=1` all the same.
 - It acts only on the 4 physical lanes (the tools that map to physical extruders 0 to 3 in the
   U1's virtual-tool table). A virtual tool with no physical mapping is skipped.
 - Any spool change while a print is running or paused is **deferred**: the name updates live, and
@@ -248,7 +254,7 @@ slicer:
   spool, so the next tap of that tag resolves to it directly. Needs the lane to be reporting a stable
   tag UID; it says so when there is none.
 - `SH_APPLY_TAG_TO_SPOOL CHANNEL={0..3} SPOOL=<id>` writes what the lane's tag says onto a Spoolman
-  spool you picked (brand, material, sub-type, colour, article number) and binds the tag to it. The
+  spool you picked (brand, material, sub-type, colours, article number) and binds the tag to it. The
   lane starts reporting that spool straight away. If another filament already has the tag's article
   number, or the tag is already tied to another spool, nothing is written and the console says so.
 - `SH_ADD_SPOOL_FROM_TAG CHANNEL={0..3}` creates a new Spoolman spool from what the lane's tag says,
@@ -373,12 +379,14 @@ offered. If one of them is the spool in your hand, tell the printer so, with
 the card is bound to it, so the next tap lands straight on it.
 
 If nothing of yours came close, the spool is made for you. The bridge creates it in Spoolman from
-what the card carries (brand, material, sub-type, colour, article number) and binds the card to it,
+what the card carries (brand, material, sub-type, colours, article number) and binds the card to it,
 so the lane starts tracking at once and the next tap resolves directly. Nothing is invented: a
 diameter and a density are required by Spoolman and are not on the card, so they are copied from your
 own filaments of that material. If you own none of that material yet, nothing is created and the
-console says which material to add one of first. Set `register_from_tag: false` in
-`[spoolman_helper]` to turn creating and writing off.
+console says which material to add one of first. A card with several colours is saved with all of
+them as Spoolman's colour list; Spoolman also needs a direction for that list and the card does not
+say which, so it is saved as coaxial unless the filament already has one. Set
+`register_from_tag: false` in `[spoolman_helper]` to turn creating and writing off.
 
 The two manual routes still work and still stop a tag from missing in the first place.
 
