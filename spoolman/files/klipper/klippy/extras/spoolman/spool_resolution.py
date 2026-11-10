@@ -187,7 +187,8 @@ class SpoolResolution:
     # record into print_task_config (what Snapmaker Orca reads) and names the AFC lane. Naming
     # the lane alone left Orca on whatever the firmware had filed, so a tagged Silk spool could
     # show correctly in Fluidd and still reach the slicer as Basic. apply_spool itself still
-    # refuses an official channel unless spoolman_overrides_tag is on. A spool the helper just
+    # refuses an official channel unless spoolman_overrides_tag is on, or the spool the tag names
+    # carries more colours in Spoolman than the tag filed. A spool the helper just
     # created comes back whole, so it is applied in the same breath as the add; asking Spoolman
     # for it again left the lane unnamed until that answer arrived. A lane resolved any other
     # way still has to ask.

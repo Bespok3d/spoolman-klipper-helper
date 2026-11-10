@@ -117,7 +117,7 @@ class SpoolTracking:
     def on_print_left_active(self, lane, afc_present):
         self.lane = lane
         self.print_state = ""
-        self.writer.release_writes_held_during_print()
+        self.writer.release_writes_held_during_print(self.helper.tag_on_lane)
         pending = self.pending_by_tool
         self.pending_by_tool = {}
         for tool_index, spool_id in pending.items():

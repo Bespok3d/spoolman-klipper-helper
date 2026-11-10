@@ -5,12 +5,13 @@ Both the touchscreen and the AFC panel read color/material from the firmware pri
 written back with the firmware's own SET_PRINT_FILAMENT_CONFIG, and the same description the
 slicer gets is put on the lane card with SET_LANE_FILAMENT_NAME. RFID-tagged (official) channels are
 not written by default: the tag is the source of truth there, and the firmware raises on such a
-write (touchscreen shows
-a "System Anomaly" popup). The spoolman_overrides_tag experiment switch flips that precedence
-and lets the Spoolman pick write anyway, with FORCE=1 so the firmware accepts it on an official
-channel. Running in-process means the official check and the
-already-matches check read the LIVE print_task_config object, so the stale-subscription race the
-old Moonraker bridge had does not exist here.
+write (touchscreen shows a "System Anomaly" popup). Two things write one anyway, with FORCE=1 so
+the firmware accepts it. The spoolman_overrides_tag experiment switch flips that precedence for
+every Spoolman pick. And the spool the tag itself names is written when its Spoolman record holds
+more colours than the tag filed on the lane, so a multi colour spool is never left showing the
+one colour its tag carries. Running in-process means the official check and the already-matches
+check read the LIVE print_task_config object, so the stale-subscription race the old Moonraker
+bridge had does not exist here.
 
 What goes into that config is also what a slicer reads back: the spool's own brand and material,
 plus a sub-type when the Spoolman record carries one. Snapmaker Orca lists the spool when a
@@ -18,6 +19,7 @@ filament preset, shipped or user-made, carries exactly that glued name.
 """
 import base64
 import re
+from typing import Any, NamedTuple
 
 from .carrier_watch import ACTIVE_PRINT_STATES, print_state
 from .spool_colours import (
@@ -333,10 +335,30 @@ def channel_is_official(filament_official, physical_extruder):
     return bool(_value_at(filament_official or [], physical_extruder))
 
 
+# A tag can file fewer colours than the spool it names carries, a dual colour spool on a one
+# colour tag. Once written, the lane holds as many colours as the write named, so it is not
+# written again until the tag is read anew and the printer files its fewer colours once more.
+# A lane with no colour list gives nothing to count.
+def write_names_more_colours_than_lane(print_task_config, physical_extruder, desired_args):
+    lane_colours = _lane_colours(print_task_config, physical_extruder)
+    if "COLORS" not in desired_args or lane_colours is None:
+        return False
+    return len(_desired_colours(desired_args)) > len(lane_colours)
+
+
+# The spool a held write was made for is kept, not whether the tag named it then: a tag read
+# during the print can put another reel on the lane before the write is released.
+class HeldWrite(NamedTuple):
+    desired_args: dict[str, str]
+    failure_problem: str
+    spool_id: Any
+
+
 class PrintTaskWriter:
     # spoolman_overrides_tag flips the lane precedence: the Spoolman record then rewrites even a
     # tag-filed (official) channel, and FORCE=1 goes with that write so the firmware accepts it.
-    # Off, the tag stays the source of truth.
+    # Off, the tag stays the source of truth, unless the spool it names carries more colours in
+    # Spoolman: that spool's record is then written over the tag.
     def __init__(
         self,
         printer,
@@ -352,8 +374,12 @@ class PrintTaskWriter:
         self.subtype_sources = subtype_sources
         self.writes_held_during_print = {}
 
-    def _firmware_write_args(self, desired):
-        if not self.spoolman_overrides_tag:
+    # Only a write already judged worth sending gets here, so an official lane means the override
+    # or a spool naming more colours than its tag let it through, and the firmware needs FORCE=1.
+    def _firmware_write_args(self, physical_extruder, desired):
+        filament_official = self._live_task_config().get("filament_official")
+        lane_is_official = channel_is_official(filament_official, physical_extruder)
+        if not (self.spoolman_overrides_tag or lane_is_official):
             return desired
         return filament_config_args_forcing_an_official_channel(desired)
 
@@ -362,64 +388,92 @@ class PrintTaskWriter:
         config = getattr(task, "print_task_config", None)
         return config if isinstance(config, dict) else {}
 
-    def _should_write(self, physical_extruder, desired_args):
+    # tag_names_this_spool says the tag on the lane was resolved to the very spool being written,
+    # the only spool whose richer colours may be written over a tag-filed lane.
+    def _should_write(self, physical_extruder, desired_args, tag_names_this_spool=False):
         config = self._live_task_config()
         if config_already_matches(config, physical_extruder, desired_args):
             return False
         if self.spoolman_overrides_tag:
             return True
-        return not channel_is_official(config.get("filament_official"), physical_extruder)
+        if not channel_is_official(config.get("filament_official"), physical_extruder):
+            return True
+        return tag_names_this_spool and write_names_more_colours_than_lane(
+            config, physical_extruder, desired_args
+        )
 
     # The firmware runs FLOW_RESET_K on every filament config write it accepts, which resets
     # the live extruder's pressure advance. A write that lands while the printer is printing
     # therefore changes how the running print extrudes, so it waits: the last write per extruder
     # is held and sent once the print is over. The lane name is never held, because the AFC panel
     # label touches nothing the print is doing.
-    def _send_or_hold_filament_config(self, physical_extruder, desired_args, failure_problem):
+    def _send_or_hold_filament_config(
+        self, physical_extruder, desired_args, failure_problem, spool_id=None
+    ):
         if print_state(self.printer) in ACTIVE_PRINT_STATES:
-            self.writes_held_during_print[physical_extruder] = (desired_args, failure_problem)
+            self.writes_held_during_print[physical_extruder] = HeldWrite(
+                desired_args, failure_problem, spool_id,
+            )
             self.logs.verbose(
                 f"Holding filament config for extruder {physical_extruder} until the print ends"
             )
             return
         self.macros.run(
-            set_print_filament_config_gcode(self._firmware_write_args(desired_args)),
+            set_print_filament_config_gcode(
+                self._firmware_write_args(physical_extruder, desired_args)
+            ),
             failure_problem,
         )
 
     # Called when the print leaves printing/paused, by the same coordinator that drains its own
-    # held writes there. Each one is re-judged against the live config first: the firmware may
-    # already carry what was held, and the lane may have become official meanwhile.
-    def release_writes_held_during_print(self):
+    # held writes there. Each one is re-judged against the live config and the tag on the lane
+    # now: the firmware may already carry what was held, the lane may have become official
+    # meanwhile, and its tag may no longer name the spool the write was held for.
+    def release_writes_held_during_print(self, tag_on_lane):
         held = self.writes_held_during_print
         self.writes_held_during_print = {}
         for physical_extruder, held_write in held.items():
-            self._release_held_write(physical_extruder, *held_write)
+            self._release_held_write(physical_extruder, held_write, tag_on_lane(physical_extruder))
 
-    def _release_held_write(self, physical_extruder, desired_args, failure_problem):
-        if not self._should_write(physical_extruder, desired_args):
+    # The newest judgement for a lane is the one that holds: a write held for a spool since
+    # swapped out or cleared would otherwise land over the lane's new state when the print ends.
+    def _drop_held_write(self, physical_extruder):
+        self.writes_held_during_print.pop(physical_extruder, None)
+
+    def _release_held_write(self, physical_extruder, held_write, tag_on_lane_now):
+        tag_info = tag_describing_spool(tag_on_lane_now, held_write.spool_id)
+        tag_names_this_spool = tag_info is not None
+        if not self._should_write(physical_extruder, held_write.desired_args, tag_names_this_spool):
             return
-        self._send_or_hold_filament_config(physical_extruder, desired_args, failure_problem)
+        self._send_or_hold_filament_config(physical_extruder, *held_write)
 
     # tag_on_lane is the tag report the lane holds, if any: when it describes this same spool and
-    # names more colours than the Spoolman record, a multi colour tag is not flattened.
+    # names more colours than the Spoolman record, a multi colour tag is not flattened; when the
+    # Spoolman record names more, those colours are written even over the tag.
     def apply_spool(self, physical_extruder, spool, tag_on_lane=None):
-        tag_info = tag_describing_spool(tag_on_lane, (spool or {}).get("id"))
+        spool_id = (spool or {}).get("id")
+        tag_info = tag_describing_spool(tag_on_lane, spool_id)
+        tag_names_this_spool = tag_info is not None
         desired = filament_config_args_from_spool(
             spool, physical_extruder, self.subtype_sources, tag_info
         )
         if not has_filament_fields(desired):
+            self._drop_held_write(physical_extruder)
             return
-        if self._should_write(physical_extruder, desired):
+        if self._should_write(physical_extruder, desired, tag_names_this_spool):
             self._send_or_hold_filament_config(
                 physical_extruder, desired,
                 f"could not write filament config for extruder {physical_extruder}",
+                spool_id,
             )
+        else:
+            self._drop_held_write(physical_extruder)
         return self.label_lane(physical_extruder, spool)
 
     def clear_extruder(self, physical_extruder):
         desired = filament_config_clear_args(physical_extruder)
         if not self._should_write(physical_extruder, desired):
+            self._drop_held_write(physical_extruder)
             return
         self._send_or_hold_filament_config(
             physical_extruder, desired,
@@ -430,8 +484,8 @@ class PrintTaskWriter:
     # Pushed even when the persisted config already matched, so a re-pick after a restart
     # (which clears the AFC lane's name) re-labels the lane. RFID-resolved lanes go through
     # apply_spool, which always names the lane even when it leaves an official channel
-    # alone (override off). With the override on, apply_spool also sends FORCE=1 so the
-    # firmware accepts the Spoolman sub-type on a tagged lane. Hands back the name it put
+    # alone (override off). When it does write one, it sends FORCE=1 so the firmware
+    # accepts the Spoolman record on a tagged lane. Hands back the name it put
     # on the lane, so a caller holding a spool record straight from Spoolman can tell
     # whether that record named the lane or whether it has to go and ask.
     def label_lane(self, physical_extruder, spool):

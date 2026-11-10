@@ -13,6 +13,7 @@ from spoolman.print_task_writer import (
     set_print_filament_config_gcode,
     slicer_filament_description,
 )
+from spoolman.spool_colours import FIRMWARE_COLOR_NUMS_MAX
 
 SPOOL = {
     "id": 42,
@@ -169,6 +170,10 @@ def build_writer(task_config, spoolman_overrides_tag=False, print_state=""):
 
 def end_the_print(writer):
     writer.printer.print_stats.state = "complete"
+
+
+def no_tag_on_any_lane(physical_extruder):
+    return None
 
 
 def config_writes_sent(macros):
@@ -396,7 +401,7 @@ def test_the_held_write_goes_out_once_the_print_is_over():
     writer, macros = build_writer(empty_task_config(), print_state="printing")
     writer.apply_spool(3, SPOOL)
     end_the_print(writer)
-    writer.release_writes_held_during_print()
+    writer.release_writes_held_during_print(no_tag_on_any_lane)
     assert config_writes_sent(macros) == [EXPECTED_GCODE]
 
 
@@ -405,7 +410,7 @@ def test_only_the_last_spool_picked_during_a_print_is_written():
     writer.apply_spool(3, NAME_CARRIES_SUBTYPE_SPOOL)
     writer.apply_spool(3, SPOOL)
     end_the_print(writer)
-    writer.release_writes_held_during_print()
+    writer.release_writes_held_during_print(no_tag_on_any_lane)
     assert config_writes_sent(macros) == [EXPECTED_GCODE]
 
 
@@ -417,7 +422,7 @@ def test_clearing_an_extruder_while_printing_blanks_the_lane_and_waits():
     writer.clear_extruder(3)
     assert macros.commands == [set_lane_filament_name_gcode(3, "")]
     end_the_print(writer)
-    writer.release_writes_held_during_print()
+    writer.release_writes_held_during_print(no_tag_on_any_lane)
     assert config_writes_sent(macros) == [
         set_print_filament_config_gcode(filament_config_clear_args(3))
     ]
@@ -433,7 +438,7 @@ def test_a_held_write_the_printer_already_carries_is_dropped():
     task["filament_sub_type"][3] = "Basic"
     task["filament_color_rgba"][3] = "3FD2C5FF"
     end_the_print(writer)
-    writer.release_writes_held_during_print()
+    writer.release_writes_held_during_print(no_tag_on_any_lane)
     assert config_writes_sent(macros) == []
 
 
@@ -553,6 +558,11 @@ def test_a_one_colour_list_with_no_color_hex_still_writes_that_colour():
     assert "COLOR_NUMS" not in args
 
 
+# The firmware files a lane's colours in all of its slots and pads the unused ones with white.
+def lane_colour_slots(colours):
+    return colours + ["FFFFFF"] * (FIRMWARE_COLOR_NUMS_MAX - len(colours))
+
+
 def multi_colour_task_config(colours, alpha=255):
     task = empty_task_config()
     task["filament_vendor"][3] = "Eryone"
@@ -562,9 +572,8 @@ def multi_colour_task_config(colours, alpha=255):
     task["filament_color_multi"] = [
         {"nums": 1, "alpha": 255, "mode": 0, "colors": ["FFFFFF"]} for _ in range(4)
     ]
-    padded = colours + ["FFFFFF"] * (5 - len(colours))
     task["filament_color_multi"][3] = {
-        "nums": len(colours), "alpha": alpha, "mode": 0, "colors": padded,
+        "nums": len(colours), "alpha": alpha, "mode": 0, "colors": lane_colour_slots(colours),
     }
     return task
 
@@ -590,3 +599,136 @@ def test_a_single_colour_matching_only_the_first_of_several_is_rewritten():
     writer, macros = build_writer(task)
     writer.apply_spool(3, SPOOL)
     assert config_writes_sent(macros) == [EXPECTED_GCODE]
+
+
+# The firmware's state of a lane its tag filed: official, holding the colours the tag carried.
+def tag_filed_lane(task, physical_extruder, colours):
+    task["filament_color_multi"][physical_extruder] = {
+        "nums": len(colours), "alpha": 255, "mode": 0, "colors": lane_colour_slots(colours),
+    }
+    task["filament_official"][physical_extruder] = True
+    return task
+
+
+def one_colour_tag_lane():
+    return tag_filed_lane(multi_colour_task_config(["FFFFFF"]), 3, ["FFFFFF"])
+
+
+FORCED_MULTI_COLOUR_GCODE = (
+    'SET_PRINT_FILAMENT_CONFIG CONFIG_EXTRUDER=3 FORCE=1 VENDOR="Eryone" FILAMENT_TYPE="PLA" '
+    f'FILAMENT_SUBTYPE="Silk" {MULTI_COLOUR_ARGS}'
+)
+
+TWO_COLOUR_SPOOL = {
+    "id": 90,
+    "filament": {
+        "name": "PLA Silk Dual",
+        "material": "PLA",
+        "multi_color_hexes": "112233,445566",
+        "vendor": {"name": "Eryone"},
+    },
+}
+
+TAG_TWO_COLOURS_ON_SPOOL_90 = {
+    **TAG_ONE_COLOUR_ON_SPOOL_89, "SPOOL_ID": 90, "COLOR_NUMS": 2,
+    "RGB_1": 0xAABBCC, "RGB_2": 0xDDEEFF, "ARGB_COLOR": 0xFFAABBCC,
+}
+
+
+def tag_naming_spool_89_on_every_lane(physical_extruder):
+    return TAG_ONE_COLOUR_ON_SPOOL_89
+
+
+def tag_naming_spool_90_on_every_lane(physical_extruder):
+    return TAG_TWO_COLOURS_ON_SPOOL_90
+
+
+def test_a_tagged_lane_gets_the_extra_colours_of_the_spool_its_tag_names():
+    # Before, the tag lane kept its one colour unless the override switch was on.
+    writer, macros = build_writer(one_colour_tag_lane())
+    writer.apply_spool(3, MULTI_COLOUR_SPOOL, TAG_ONE_COLOUR_ON_SPOOL_89)
+    assert config_writes_sent(macros) == [FORCED_MULTI_COLOUR_GCODE]
+
+
+def test_once_the_lane_holds_the_spools_colours_it_is_not_written_again():
+    task = one_colour_tag_lane()
+    writer, macros = build_writer(task)
+    writer.apply_spool(3, MULTI_COLOUR_SPOOL, TAG_ONE_COLOUR_ON_SPOOL_89)
+    task.update(multi_colour_task_config(["30D68B", "E736D4", "A8C70C", "CC580A"]))
+    writer.apply_spool(3, MULTI_COLOUR_SPOOL, TAG_ONE_COLOUR_ON_SPOOL_89)
+    assert config_writes_sent(macros) == [FORCED_MULTI_COLOUR_GCODE]
+
+
+def test_the_extra_colours_wait_for_the_print_to_end():
+    writer, macros = build_writer(one_colour_tag_lane(), print_state="printing")
+    writer.apply_spool(3, MULTI_COLOUR_SPOOL, TAG_ONE_COLOUR_ON_SPOOL_89)
+    assert config_writes_sent(macros) == []
+    end_the_print(writer)
+    writer.release_writes_held_during_print(tag_naming_spool_89_on_every_lane)
+    assert config_writes_sent(macros) == [FORCED_MULTI_COLOUR_GCODE]
+
+
+def test_a_tagged_lane_holding_as_many_colours_as_its_spool_is_left_to_the_tag():
+    task = tag_filed_lane(one_colour_tag_lane(), 2, ["AABBCC", "DDEEFF"])
+    writer, macros = build_writer(task)
+    writer.apply_spool(2, TWO_COLOUR_SPOOL, TAG_TWO_COLOURS_ON_SPOOL_90)
+    writer.apply_spool(3, MULTI_COLOUR_SPOOL, TAG_ONE_COLOUR_ON_SPOOL_89)
+    assert config_writes_sent(macros) == [FORCED_MULTI_COLOUR_GCODE]
+
+
+def test_a_tagged_lane_whose_tag_holds_more_colours_is_left_to_the_tag():
+    task = tag_filed_lane(one_colour_tag_lane(), 2, ["112233", "445566", "778899"])
+    writer, macros = build_writer(task)
+    writer.apply_spool(2, SPOOL, TAG_THREE_COLOURS)
+    writer.apply_spool(3, MULTI_COLOUR_SPOOL, TAG_ONE_COLOUR_ON_SPOOL_89)
+    assert config_writes_sent(macros) == [FORCED_MULTI_COLOUR_GCODE]
+
+
+def test_a_richer_spool_the_tag_does_not_name_is_never_written_over_the_tag():
+    task = tag_filed_lane(one_colour_tag_lane(), 2, ["FFFFFF"])
+    writer, macros = build_writer(task)
+    writer.apply_spool(2, TWO_COLOUR_SPOOL, TAG_ONE_COLOUR_ON_SPOOL_89)
+    writer.apply_spool(3, MULTI_COLOUR_SPOOL, TAG_ONE_COLOUR_ON_SPOOL_89)
+    assert config_writes_sent(macros) == [FORCED_MULTI_COLOUR_GCODE]
+
+
+def test_a_write_held_for_a_spool_since_swapped_out_is_dropped():
+    # Before, the held write for the first spool landed over the second when the print ended.
+    task = multi_colour_task_config(["30D68B", "E736D4", "A8C70C", "CC580A"])
+    writer, macros = build_writer(task, print_state="printing")
+    writer.apply_spool(3, SPOOL)
+    writer.apply_spool(3, MULTI_COLOUR_SPOOL)
+    end_the_print(writer)
+    writer.release_writes_held_during_print(no_tag_on_any_lane)
+    assert config_writes_sent(macros) == []
+
+
+def test_a_write_held_for_a_lane_since_emptied_is_dropped():
+    writer, macros = build_writer(empty_task_config(), print_state="printing")
+    writer.apply_spool(3, SPOOL)
+    writer.clear_extruder(3)
+    end_the_print(writer)
+    writer.release_writes_held_during_print(no_tag_on_any_lane)
+    assert config_writes_sent(macros) == []
+
+
+SPOOL_WITHOUT_FILAMENT_DETAILS = {"id": 91, "filament": {"name": "Mystery reel"}}
+
+
+def test_a_write_held_for_a_spool_since_swapped_for_one_with_no_details_is_dropped():
+    # Before, the first spool's held write landed over the lane once the print ended.
+    writer, macros = build_writer(empty_task_config(), print_state="printing")
+    writer.apply_spool(3, SPOOL)
+    writer.apply_spool(3, SPOOL_WITHOUT_FILAMENT_DETAILS)
+    end_the_print(writer)
+    writer.release_writes_held_during_print(no_tag_on_any_lane)
+    assert config_writes_sent(macros) == []
+
+
+def test_a_held_colour_write_never_lands_over_a_tag_read_during_the_print():
+    # The tag on the lane now names another spool, so the extra colours are no longer its own.
+    writer, macros = build_writer(one_colour_tag_lane(), print_state="printing")
+    writer.apply_spool(3, MULTI_COLOUR_SPOOL, TAG_ONE_COLOUR_ON_SPOOL_89)
+    end_the_print(writer)
+    writer.release_writes_held_during_print(tag_naming_spool_90_on_every_lane)
+    assert config_writes_sent(macros) == []
