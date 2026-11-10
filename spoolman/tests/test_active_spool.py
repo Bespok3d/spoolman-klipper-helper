@@ -2,7 +2,6 @@
 """The active-spool rule, ported device-verified from the retired Moonraker bridge."""
 from active_spool import (
     coerce_spool_id,
-    lane_label,
     physical_extruder_for_tool,
     physical_extruder_from_lane,
     resolve_active_spool,
@@ -41,19 +40,29 @@ def test_tools_for_physical_extruder_returns_every_claimant():
 
 
 def test_mounted_lane_resolves_its_own_spool():
-    assert resolve_active_spool("E2", {2: 104}) == 104
+    assert resolve_active_spool("E2", {2: 104}, NATIVE_MAP) == 104
 
 
 def test_no_lane_mounted_resolves_none():
-    assert resolve_active_spool(None, {2: 104}) is None
+    assert resolve_active_spool(None, {2: 104}, NATIVE_MAP) is None
 
 
 def test_mounted_lane_with_no_spool_anywhere_resolves_none():
-    assert resolve_active_spool("E2", {0: None, 1: None, 2: None, 3: None}) is None
+    assert resolve_active_spool("E2", {0: None, 1: None, 2: None, 3: None}, NATIVE_MAP) is None
 
 
-def test_lane_label_names_every_tool_the_map_points_at_the_lane():
-    remapped = [2, 0, None, None, None, 2]
-    assert lane_label(remapped, 2) == "E2 (T0, T5)"
-    assert lane_label(remapped, 0) == "E0 (T1)"
-    assert lane_label(remapped, 3) == "E3"
+def test_home_tool_wins_over_a_borrowed_tools_stale_spool():
+    # Snapmaker virtual tooling (map_table=[[0,2],[1,3]]): T1 borrowed onto E3 carries its OWN
+    # native channel's stale spool 24; E3's home tool T3 resolved 55. Home wins outright.
+    remapped = [2, 3, 2, 3]
+    assert resolve_active_spool("E3", {1: 24, 3: 55}, remapped) == 55
+
+
+def test_borrowers_resolve_only_when_home_is_empty_and_unanimous():
+    remapped = [3, 3, 2, 3]
+    assert resolve_active_spool("E3", {0: 80, 1: 80, 2: 57, 3: None}, remapped) == 80
+
+
+def test_disagreeing_borrowers_resolve_to_unknown_not_a_guess():
+    remapped = [3, 3, 2, 3]
+    assert resolve_active_spool("E3", {0: 10, 1: 20, 2: 57, 3: None}, remapped) is None

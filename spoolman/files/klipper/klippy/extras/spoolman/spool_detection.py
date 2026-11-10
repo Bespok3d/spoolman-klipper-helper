@@ -3,16 +3,18 @@
 DETECT_SPOOLS re-reads what the printer already knows: the firmware's print-task spool fields
 enrich the holders, persisted tag data (rfid_data.json, written by the RFID substrate) restores
 identified lanes across a restart, then every channel re-reads its tag. The re-read is
-asynchronous: this module snapshots each lane's current pick (the lane's tracked spool first, AFC
-lane otherwise) and waits for the fresh RFID callback. A tagged report replaces the snapshot. A
+asynchronous: this module snapshots each lane's current pick (tool macro first, AFC lane
+otherwise) and waits for the fresh RFID callback. A tagged report replaces the snapshot. A
 report with no tag restores that pick so a panel or screen choice is not wiped. A lane with
 no pick is left alone: the helper does not write NONE over a screen-set color. The print-start
-sync caches the Spoolman record of every manual macro pick (manual mode only).
+sync refreshes the tool map (auto mode) or re-resolves every manual macro pick (manual mode).
 The data-file path is injected: where the file lives on a given machine is deployment
 knowledge, not this module's.
 """
 import json
 
+from .active_spool import coerce_spool_id
+from .afc import lane_spool_id
 from .filament_info import is_untagged_filament
 from .u1_tools import MAX_TOOLS_COUNT
 
@@ -42,7 +44,10 @@ class SpoolDetection:
             self.macros.detect_spool(extruder)
 
     def pick_on_channel(self, channel):
-        return self.helper.resolution.current_manual_pick(channel)
+        return (
+            coerce_spool_id(self.macros.get_spool_id_for_tool(channel))
+            or coerce_spool_id(lane_spool_id(self.helper.printer, channel))
+        )
 
     def take_pending_pick(self, channel):
         if channel not in self.pending_picks:
@@ -64,8 +69,7 @@ class SpoolDetection:
 
     def sync_spools_tools(self):
         # Auto mode needs no sync: the tool map is read live, never cached. Only manual picks,
-        # which have no live source, get their Spoolman record cached here; which lane a tool
-        # feeds from, and so its AFC lane, is the tracking's to keep.
+        # which have no live source, are replayed onto their mapped tools here.
         if self.helper.mode != 'manual':
             return
         for tool_id in range(MAX_TOOLS_COUNT):
@@ -79,3 +83,6 @@ class SpoolDetection:
         def on_spool(spool, spoolman_unanswered, picked_spool_id=spool_id):
             self.holders.spools_by_id[picked_spool_id] = spool
         self.spoolman.resolve_spool({"SPOOL_ID": spool_id}, on_spool)
+        extruder = self.u1_tools.extruder_for_tool(tool_id)
+        if extruder is not None:
+            self.helper.push_spool_to_afc(extruder, spool_id)

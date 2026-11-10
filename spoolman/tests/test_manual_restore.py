@@ -16,12 +16,20 @@ class RecordingLogs:
     log = warn = error = verbose = debug = _record
 
 
+class RecordingMacros:
+    def __init__(self):
+        self.tool_spool_sets = []
+
+    def set_spool_id_for_tool(self, tool, spool_id):
+        self.tool_spool_sets.append((tool, spool_id))
+
+
 class RecordingTracking:
     def __init__(self):
-        self.lane_picks = []
+        self.picks = []
 
-    def pick_for_lane(self, lane, spool_id):
-        self.lane_picks.append((lane, spool_id))
+    def on_pick(self, tool_index, spool_id, state):
+        self.picks.append((tool_index, spool_id, state))
 
 
 class FakeHolders:
@@ -35,6 +43,7 @@ class FakeHolders:
 def build_restore(tmp_path, tagged_lanes=()):
     helper = types.SimpleNamespace(
         logs=RecordingLogs(),
+        macros=RecordingMacros(),
         holders=FakeHolders(tagged_lanes),
         tracking=RecordingTracking(),
     )
@@ -58,14 +67,15 @@ def test_restore_replays_picks_through_the_normal_cascade(tmp_path):
     restore, helper = build_restore(tmp_path)
     store_manual_spool(restore.manual_spools_path, 2, 104)
     restore.restore_all()
-    assert helper.tracking.lane_picks == [(2, 104)]
-    assert any("Restoring manual spool 104 for lane E2" in line for line in helper.logs.lines)
+    assert helper.macros.tool_spool_sets == [("T2", 104)]
+    assert helper.tracking.picks == [(2, 104, "")]
+    assert any("Restoring manual spool 104 for T2" in line for line in helper.logs.lines)
 
 
 def test_a_tag_that_appeared_while_off_supersedes_the_stale_pick(tmp_path):
     restore, helper = build_restore(tmp_path, tagged_lanes={2})
     store_manual_spool(restore.manual_spools_path, 2, 104)
     restore.restore_all()
-    assert helper.tracking.lane_picks == []
+    assert helper.tracking.picks == []
     assert load_manual_spools(restore.manual_spools_path) == {}  # stale entry dropped
     assert any("superseded by a tag" in line for line in helper.logs.lines)

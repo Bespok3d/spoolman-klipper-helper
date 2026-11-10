@@ -176,16 +176,6 @@ def no_tag_on_any_lane(physical_extruder):
     return None
 
 
-def lane_three_holding(spool):
-    """The lane-spool lookup of a printer whose lane 3 holds this spool now (None: nothing)."""
-    return {3: spool["id"] if spool else None}.get
-
-
-# The lane lookup still names the first spool, so only the newer judgement itself can drop the
-# write held for it.
-LANE_THREE_ON_THE_FIRST_SPOOL = lane_three_holding(SPOOL)
-
-
 def config_writes_sent(macros):
     return [
         command for command in macros.commands
@@ -411,7 +401,7 @@ def test_the_held_write_goes_out_once_the_print_is_over():
     writer, macros = build_writer(empty_task_config(), print_state="printing")
     writer.apply_spool(3, SPOOL)
     end_the_print(writer)
-    writer.release_writes_held_during_print(no_tag_on_any_lane, lane_three_holding(SPOOL))
+    writer.release_writes_held_during_print(no_tag_on_any_lane)
     assert config_writes_sent(macros) == [EXPECTED_GCODE]
 
 
@@ -420,7 +410,7 @@ def test_only_the_last_spool_picked_during_a_print_is_written():
     writer.apply_spool(3, NAME_CARRIES_SUBTYPE_SPOOL)
     writer.apply_spool(3, SPOOL)
     end_the_print(writer)
-    writer.release_writes_held_during_print(no_tag_on_any_lane, lane_three_holding(SPOOL))
+    writer.release_writes_held_during_print(no_tag_on_any_lane)
     assert config_writes_sent(macros) == [EXPECTED_GCODE]
 
 
@@ -432,7 +422,7 @@ def test_clearing_an_extruder_while_printing_blanks_the_lane_and_waits():
     writer.clear_extruder(3)
     assert macros.commands == [set_lane_filament_name_gcode(3, "")]
     end_the_print(writer)
-    writer.release_writes_held_during_print(no_tag_on_any_lane, lane_three_holding(None))
+    writer.release_writes_held_during_print(no_tag_on_any_lane)
     assert config_writes_sent(macros) == [
         set_print_filament_config_gcode(filament_config_clear_args(3))
     ]
@@ -448,7 +438,7 @@ def test_a_held_write_the_printer_already_carries_is_dropped():
     task["filament_sub_type"][3] = "Basic"
     task["filament_color_rgba"][3] = "3FD2C5FF"
     end_the_print(writer)
-    writer.release_writes_held_during_print(no_tag_on_any_lane, lane_three_holding(SPOOL))
+    writer.release_writes_held_during_print(no_tag_on_any_lane)
     assert config_writes_sent(macros) == []
 
 
@@ -674,9 +664,7 @@ def test_the_extra_colours_wait_for_the_print_to_end():
     writer.apply_spool(3, MULTI_COLOUR_SPOOL, TAG_ONE_COLOUR_ON_SPOOL_89)
     assert config_writes_sent(macros) == []
     end_the_print(writer)
-    writer.release_writes_held_during_print(
-        tag_naming_spool_89_on_every_lane, lane_three_holding(MULTI_COLOUR_SPOOL)
-    )
+    writer.release_writes_held_during_print(tag_naming_spool_89_on_every_lane)
     assert config_writes_sent(macros) == [FORCED_MULTI_COLOUR_GCODE]
 
 
@@ -711,17 +699,7 @@ def test_a_write_held_for_a_spool_since_swapped_out_is_dropped():
     writer.apply_spool(3, SPOOL)
     writer.apply_spool(3, MULTI_COLOUR_SPOOL)
     end_the_print(writer)
-    writer.release_writes_held_during_print(no_tag_on_any_lane, LANE_THREE_ON_THE_FIRST_SPOOL)
-    assert config_writes_sent(macros) == []
-
-
-def test_a_write_held_for_a_spool_the_lane_no_longer_holds_is_dropped():
-    writer, macros = build_writer(empty_task_config(), print_state="printing")
-    writer.apply_spool(3, SPOOL)
-    end_the_print(writer)
-    writer.release_writes_held_during_print(
-        no_tag_on_any_lane, lane_three_holding(RAPID_PETG_SPOOL)
-    )
+    writer.release_writes_held_during_print(no_tag_on_any_lane)
     assert config_writes_sent(macros) == []
 
 
@@ -730,7 +708,7 @@ def test_a_write_held_for_a_lane_since_emptied_is_dropped():
     writer.apply_spool(3, SPOOL)
     writer.clear_extruder(3)
     end_the_print(writer)
-    writer.release_writes_held_during_print(no_tag_on_any_lane, LANE_THREE_ON_THE_FIRST_SPOOL)
+    writer.release_writes_held_during_print(no_tag_on_any_lane)
     assert config_writes_sent(macros) == []
 
 
@@ -743,7 +721,7 @@ def test_a_write_held_for_a_spool_since_swapped_for_one_with_no_details_is_dropp
     writer.apply_spool(3, SPOOL)
     writer.apply_spool(3, SPOOL_WITHOUT_FILAMENT_DETAILS)
     end_the_print(writer)
-    writer.release_writes_held_during_print(no_tag_on_any_lane, LANE_THREE_ON_THE_FIRST_SPOOL)
+    writer.release_writes_held_during_print(no_tag_on_any_lane)
     assert config_writes_sent(macros) == []
 
 
@@ -752,7 +730,5 @@ def test_a_held_colour_write_never_lands_over_a_tag_read_during_the_print():
     writer, macros = build_writer(one_colour_tag_lane(), print_state="printing")
     writer.apply_spool(3, MULTI_COLOUR_SPOOL, TAG_ONE_COLOUR_ON_SPOOL_89)
     end_the_print(writer)
-    writer.release_writes_held_during_print(
-        tag_naming_spool_90_on_every_lane, lane_three_holding(MULTI_COLOUR_SPOOL)
-    )
+    writer.release_writes_held_during_print(tag_naming_spool_90_on_every_lane)
     assert config_writes_sent(macros) == []

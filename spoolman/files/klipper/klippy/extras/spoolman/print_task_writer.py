@@ -21,14 +21,13 @@ import base64
 import re
 from typing import Any, NamedTuple
 
-from .active_spool import coerce_spool_id
+from .carrier_watch import ACTIVE_PRINT_STATES, print_state
 from .spool_colours import (
     FIRMWARE_COLOURS_SEPARATOR,
     colours_in_spoolman,
     multi_colour_args,
     tag_describing_spool,
 )
-from .u1_tools import ACTIVE_PRINT_STATES, print_state
 
 RGB_HEX_LENGTH = 6
 RGBA_HEX_LENGTH = 8
@@ -427,17 +426,13 @@ class PrintTaskWriter:
         )
 
     # Called when the print leaves printing/paused, by the same coordinator that drains its own
-    # held writes there. Each one is re-judged against the lane now: a write held for a spool the
-    # lane no longer holds is dropped, because a tool remapped onto the lane or a pick made since
-    # put another spool there. The rest are re-judged against the live config and the tag: the
-    # firmware may already carry what was held, the lane may have become official meanwhile, and
-    # its tag may no longer name the spool the write was held for.
-    def release_writes_held_during_print(self, tag_on_lane, spool_on_lane):
+    # held writes there. Each one is re-judged against the live config and the tag on the lane
+    # now: the firmware may already carry what was held, the lane may have become official
+    # meanwhile, and its tag may no longer name the spool the write was held for.
+    def release_writes_held_during_print(self, tag_on_lane):
         held = self.writes_held_during_print
         self.writes_held_during_print = {}
         for physical_extruder, held_write in held.items():
-            if coerce_spool_id(held_write.spool_id) != spool_on_lane(physical_extruder):
-                continue
             self._release_held_write(physical_extruder, held_write, tag_on_lane(physical_extruder))
 
     # The newest judgement for a lane is the one that holds: a write held for a spool since

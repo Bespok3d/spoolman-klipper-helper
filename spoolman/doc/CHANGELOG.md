@@ -2,21 +2,6 @@
 
 ## 0.1.40
 
-- Fix: during a print, every spool view now follows the tool-to-lane map the slicer sends. Before,
-  the bridge took tool T0 to be lane E0 and so on, so when a print fed T0 from E2, a spool picked
-  for T0 was filed on lane E0, and the screen and the AFC panel showed it on the wrong lane. Now a
-  pick lands on the lane that feeds the tool, and every tool on that lane shows the same spool.
-- Fix: a tool above T3, such as T5, now gets its spool tracked during a print when the slicer feeds
-  it from a lane. Before, a pick on T5 was never seen.
-- Fix: a spool change held back during a print is now dropped at the end if the lane holds a
-  different spool by then. Before, the old spool could overwrite the new one on the screen.
-- A tool that no lane feeds, such as a tool the print does not use, or T5 once the print is over,
-  now shows no spool. A spool picked on it is undone with a warning and no longer touches any
-  lane.
-- Two spools picked at the same moment for tools on one lane: one pick holds, and the other is
-  undone with a warning.
-- `DUMP_SPOOLS` now names each lane by its extruder and the tools fed from it, such as
-  `E2 (T0, T5)`, instead of `T0` to `T3`.
 - Fix: a spool with several colours (silk dual or tri colour, coaxial, gradient) now reaches the
   screen and the AFC panel with all its colours. Before, Spoolman's colour list was ignored and the
   spool showed up as plain white.

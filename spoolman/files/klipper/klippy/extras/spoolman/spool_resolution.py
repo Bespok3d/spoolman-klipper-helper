@@ -1,12 +1,12 @@
 """Resolving a lane's filament info to a Spoolman spool and mirroring it out.
 
 A stored holder resolves to a Spoolman spool id through the configured strategy chain; the id
-is then mirrored everywhere the user sees it: through the tracking, the spool_id variable of every
-tool the map feeds from that lane and the AFC lane; then the lane's Spoolman display name. The
-tool->spool queries answer "which spool does tool N use" from the macro variable (a manual pick)
-or the mapped channel's holder (a tag), honoring the helper's runtime mode. The by-hand entries
-live here too: SH_BIND_CARD_UID binds the tag currently sitting on a channel to a chosen spool,
-and SH_ADD_SPOOL_FROM_TAG turns that tag into a spool of its own.
+is then mirrored everywhere the user sees it: the tool macro's spool_id variable, the AFC lane,
+and the lane's Spoolman display name. The tool->spool queries answer "which spool does tool N
+use" from the macro variable (a manual pick) or the mapped channel's holder (a tag), honoring
+the helper's runtime mode. The by-hand entries live here too: SH_BIND_CARD_UID binds the tag
+currently sitting on a channel to a chosen spool, and SH_ADD_SPOOL_FROM_TAG turns that tag into
+a spool of its own.
 """
 from .active_spool import coerce_spool_id
 from .afc import lane_spool_id
@@ -98,12 +98,12 @@ class SpoolResolution:
 
     def current_manual_pick(self, extruder):
         return (
-            coerce_spool_id(self.helper.tracking.lane_spool(extruder))
+            coerce_spool_id(self.macros.get_spool_id_for_tool(extruder))
             or coerce_spool_id(lane_spool_id(self.helper.printer, extruder))
         )
 
     # FILAMENT_DT_UPDATE can blank print_task_config on a lane with no tag. A hand-picked
-    # spool_id still tracked on the lane or sitting on the AFC lane is re-applied so color and
+    # spool_id still sitting on the tool macro or the AFC lane is re-applied so color and
     # material come back. No pick means the screen-set config stays: the helper does not
     # write NONE over it.
     def _reapply_manual_pick(self, extruder):
@@ -117,7 +117,9 @@ class SpoolResolution:
         self.logs.verbose(
             f"Re-applying hand-picked spool {spool_id} on extruder {extruder}"
         )
-        self.helper.tracking.set_lane_spool(extruder, spool_id)
+        if coerce_spool_id(self.macros.get_spool_id_for_tool(extruder)) != spool_id:
+            self.macros.set_spool_id_for_tool(f"T{extruder}", spool_id)
+        self.helper.push_spool_to_afc(extruder, spool_id)
         self.helper.remember_manual_spool(extruder, spool_id)
         self._apply_spoolman_to_the_lane(extruder, spool_id)
 
@@ -165,17 +167,20 @@ class SpoolResolution:
     def _bind_resolved_spool(self, extruder, spool, spool_id, new_spool=None):
         self.holders.spools_by_id[spool_id] = spool
         self.logs.verbose(f"Got spool_id: {spool_id}")
+        tool = f"T{extruder}"
         self.logs.log(
-            f"Lane E{extruder} is using: {filament_info_to_string(spool, self.helper.logging)}"
+            f"Tool {tool} is using: {filament_info_to_string(spool, self.helper.logging)}"
         )
-        self.helper.tracking.set_lane_spool(extruder, spool_id)
+        self.macros.set_spool_id_for_tool(tool, spool_id)
+        self.helper.push_spool_to_afc(extruder, spool_id)
         self._apply_spoolman_to_the_lane(extruder, spool_id, new_spool)
 
     # The exact inverse of a bind, for a lane whose filament matched no spool: it must stop
-    # advertising the one that was there before, everywhere a bind writes to. The holder stays,
-    # so the lane still reports the tag it is carrying.
+    # advertising the one that was there before, in all three places a bind writes to. The holder
+    # stays, so the lane still reports the tag it is carrying.
     def _unbind_lane_spool(self, extruder):
-        self.helper.tracking.set_lane_spool(extruder, None)
+        self.macros.set_spool_id_for_tool(f"T{extruder}", None)
+        self.helper.push_spool_to_afc(extruder, None)
         self.writer.clear_lane_label(extruder)
 
     # A resolved tag is mirrored the same way a manual pick is: apply_spool writes the Spoolman
@@ -219,11 +224,12 @@ class SpoolResolution:
         self.logs.verbose(f"Resolving extruder for T{tool_id}")
         extruder = self.u1_tools.extruder_for_tool(tool_id)
         if extruder is None:
+            self.logs.warn(f"Cannot find mapped extruder for T{tool_id}")
             return None
         spool = self.holders.spool_holders[extruder]
         if is_untagged_filament(spool):
-            self.logs.verbose(f"Filament for E{extruder} is untagged, falling back to manual")
-            spool = self.get_spool_for_tool(tool_id)
+            self.logs.verbose(f"Filament for T{extruder} is untagged, falling back to manual")
+            spool = self.get_spool_for_tool(extruder)
         if spool is None:
             self.logs.verbose(f"Cannot find filament info for T{tool_id} on extruder {extruder}")
             return None

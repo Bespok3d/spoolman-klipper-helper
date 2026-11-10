@@ -2,9 +2,8 @@
 
 One holder per physical channel carries the filament info the printer reported for that lane
 (tag data, or an untagged-but-loaded marker); ``spools_by_id`` caches every resolved spool so
-labels and summaries can name it. Filament presence and releasing a lane's spool are injected
-callables: whether a lane physically holds filament is device knowledge, which tools a lane feeds
-is the tracking's, and this store stays free of both.
+labels and summaries can name it. Filament presence is an injected callable: whether a lane
+physically holds filament is device knowledge, and this store stays free of it.
 """
 from .filament_info import is_untagged_filament
 from .u1_tools import EXTRUDERS_COUNT
@@ -19,10 +18,10 @@ def _merge_detected_fields(holder, detected_fields):
 
 
 class SpoolHolders:
-    def __init__(self, logs, macros, release_lane, lane_has_filament):
+    def __init__(self, logs, macros, push_spool_to_afc, lane_has_filament):
         self.logs = logs
         self.macros = macros
-        self.release_lane = release_lane
+        self.push_spool_to_afc = push_spool_to_afc
         self.lane_has_filament = lane_has_filament
         self.spool_holders = [None] * EXTRUDERS_COUNT
         self.spools_by_id = {}
@@ -45,20 +44,21 @@ class SpoolHolders:
     def _note_untagged_lane(self, channel, filament_info):
         if self.lane_has_filament(channel):
             self.spool_holders[channel] = filament_info
-            self.logs.log(f"Lane E{channel} loaded with UNKNOWN filament (unassigned, no tag)")
+            self.logs.log(f"Tool T{channel} loaded with UNKNOWN filament (unassigned, no tag)")
         else:
             self.spool_holders[channel] = None
-            self.logs.verbose(f"Lane E{channel} is empty")
+            self.logs.verbose(f"Tool T{channel} is empty")
 
     def clear_channel(self, channel, force=False):
         self.logs.log(f"Clearing spool from extruder {channel}")
         if channel is None:
             return
+        self.macros.set_spool_id_for_tool(f"T{channel}", None)
+        self.push_spool_to_afc(channel, None)
         if force:
             self.macros.clear_print_task_config(channel)
         self._drop_cached_spool(channel)
         self.spool_holders[channel] = None
-        self.release_lane(channel)
 
     def _drop_cached_spool(self, channel):
         holder = self.spool_holders[channel]
@@ -68,7 +68,7 @@ class SpoolHolders:
         if spool_id and spool_id in self.spools_by_id:
             del self.spools_by_id[spool_id]
 
-    # Drops the tag report only: the lane's pick and the firmware color stay as they are.
+    # Drops the tag report only: the tool pick and the firmware color stay as they are.
     def forget_tag(self, channel):
         if 0 <= channel < EXTRUDERS_COUNT:
             self.spool_holders[channel] = None
