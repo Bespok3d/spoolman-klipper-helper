@@ -59,6 +59,9 @@ class RecordingTracking:
     def error(self, message):
         self.calls.append(("error", message))
 
+    def warn(self, message):
+        self.calls.append(("warn", message))
+
     def on_primed(self, spool_by_tool, lane, afc_present, state=""):
         self.calls.append(("primed", dict(spool_by_tool), lane, afc_present))
 
@@ -81,16 +84,33 @@ class RecordingTracking:
         pass  # every-sample heartbeat for the settle window, not a transition
 
 
-def build_watch(lane="E2", state="standby", exist=None, spool_ids=(None, None, None, None)):
+def build_watch(
+    lane="E2", state="standby", exist=None, spool_ids=(None, None, None, None), tracking=None,
+):
     printer = FakePrinter()
     printer.objects["AFC"] = FakeAfc(lane)
     printer.objects["print_stats"] = FakePrintStats(state)
     printer.objects["print_task_config"] = FakePrintTaskConfig(exist or [True] * 4)
     for tool_index, spool_id in enumerate(spool_ids):
         printer.objects[f"gcode_macro T{tool_index}"] = FakeMacro(spool_id)
-    tracking = RecordingTracking()
+    tracking = tracking or RecordingTracking()
     watch = CarrierWatch(printer, tracking)
     return watch, printer, tracking
+
+
+class FailingPrimeTracking(RecordingTracking):
+    def on_primed(self, spool_by_tool, lane, afc_present, state=""):
+        raise ValueError("tag unreadable")
+
+
+def test_a_failed_startup_read_warns_with_the_way_out():
+    watch, _printer, tracking = build_watch(tracking=FailingPrimeTracking())
+    watch._sample()
+    warnings = [call[1] for call in tracking.calls if call[0] == "warn"]
+    assert len(warnings) == 1
+    assert "tag unreadable" in warnings[0]
+    assert "DETECT_SPOOLS" in warnings[0]
+    assert watch.primed
 
 
 def test_changed_tools():

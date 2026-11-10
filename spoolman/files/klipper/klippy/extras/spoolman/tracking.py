@@ -67,7 +67,10 @@ class SpoolTracking:
             self._reconcile_active()
         elif picked is not None:
             # No carrier concept at all: a pick is the only signal, as on a single-extruder
-            # printer where "selected" and "mounted" are the same thing.
+            # printer where "selected" and "mounted" are the same thing. Known and left alone: at
+            # startup a restored pick lands here before the first sample has seen AFC, so it is
+            # made active and the first sample sets the active spool back to none a moment later.
+            # Nothing prints then, so nothing is counted, and no user has reported it.
             self._apply_active(picked)
 
     def on_mount_changed(self, lane, afc_present, state):
@@ -78,18 +81,13 @@ class SpoolTracking:
 
     # A spool chosen in the AFC panel's own selection dialog (SET_SPOOL_ID -> a lane attribute
     # nothing else reads). Routed onto the lane's home tool macro so the ONE existing pick
-    # cascade runs: screen write, Spoolman widget, location, active recompute. An RFID-identified
-    # lane is left alone (the tag is the source of truth), and a value that already matches the
-    # tool is the echo of our own push-back, not a user action.
+    # cascade runs: screen write, Spoolman widget, location, active recompute. A tagged lane takes
+    # the pick too, as it does from the Spoolman widget, so the AFC panel and Spoolman never
+    # disagree. A value that already matches the tool is the echo of our own push-back, not a
+    # user action.
     def on_afc_lane_pick(self, lane_index, spool_id, state):
         self.print_state = state
         picked = coerce_spool_id(spool_id)
-        if self.helper.lane_is_tagged(lane_index):
-            if picked is not None:
-                self.logs.warn(
-                    f"AFC pick ignored for T{lane_index}: lane has an RFID-identified spool"
-                )
-            return
         if picked == coerce_spool_id(self.spool_by_tool.get(lane_index)):
             return
         self.logs.log(f"AFC panel pick: spool {picked or 'none'} -> T{lane_index}")

@@ -2,6 +2,10 @@
 
 ## 0.1.40
 
+- Fix: a spool picked in the AFC panel on a lane with a tag now reaches Spoolman too. Before, the
+  pick was ignored there, so the AFC panel and the Spoolman widget showed different spools.
+- If the loaded spools cannot be read at startup, the console now warns and says what to do: run
+  `DETECT_SPOOLS`, or take a tagged spool off its lane and put it back. Klipper keeps running.
 - Fix: a spool with several colours (silk dual or tri colour, coaxial, gradient) now reaches the
   screen and the AFC panel with all its colours. Before, Spoolman's colour list was ignored and the
   spool showed up as plain white.

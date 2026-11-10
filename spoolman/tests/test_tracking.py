@@ -68,9 +68,6 @@ class FakeHelper:
     def tag_on_lane(self, channel):
         return self.tags_on_lanes.get(channel)
 
-    def lane_is_tagged(self, channel):
-        return channel in self.tags_on_lanes
-
     def remember_manual_spool(self, tool_index, spool_id):
         self.remembered.append((tool_index, spool_id))
 
@@ -351,13 +348,13 @@ def test_afc_panel_pick_lands_on_the_lanes_home_tool():
     assert any("AFC panel pick" in line for line in logs.lines)
 
 
-def test_afc_panel_pick_on_a_tagged_lane_is_ignored():
-    tracking, _spoolman, macros, logs = build_tracking()
+def test_afc_panel_pick_on_a_tagged_lane_reaches_spoolman():
+    tracking, _spoolman, macros, _logs = build_tracking()
     tracking.helper.tags_on_lanes[2] = {"SPOOL_ID": 57, "MAIN_TYPE": "PLA"}
     tracking.on_primed({2: 57}, None, afc_present=True)
     tracking.on_afc_lane_pick(2, 94, "standby")
-    assert macros.tool_spool_sets == []
-    assert any("ignored" in line for line in logs.lines)
+    assert macros.tool_spool_sets == [("T2", 94)]
+    assert tracking.spool_by_tool[2] == 94
 
 
 def test_our_own_afc_pushback_echo_is_not_a_pick():

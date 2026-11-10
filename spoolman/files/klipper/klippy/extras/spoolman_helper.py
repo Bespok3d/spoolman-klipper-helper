@@ -130,9 +130,6 @@ class SpoolmanHelper:
     def spools_by_id(self):
         return self.holders.spools_by_id
 
-    def lane_is_tagged(self, channel):
-        return self.holders.lane_is_tagged(channel)
-
     def tag_on_lane(self, channel):
         return self.holders.tag_on_lane(channel)
 

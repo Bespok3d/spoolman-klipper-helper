@@ -114,14 +114,25 @@ class CarrierWatch:
     def _sample(self):
         snapshot = self._snapshot()
         if not self.primed:
-            self.primed = True
-            self._absorb(snapshot)
+            self._prime(snapshot)
+            return
+        self._dispatch_transitions(snapshot)
+
+    # A failed first read must not stop Klipper over an add-on: the user is told how to have the
+    # loaded spools read again instead.
+    def _prime(self, snapshot):
+        self.primed = True
+        self._absorb(snapshot)
+        try:
             self.tracking.on_primed(
                 snapshot["spool_by_tool"], snapshot["lane"],
                 snapshot["afc_present"], snapshot["state"],
             )
-            return
-        self._dispatch_transitions(snapshot)
+        except Exception as prime_error:
+            self.tracking.logs.warn(
+                f"Could not read the loaded spools at startup ({prime_error}). Run "
+                "DETECT_SPOOLS, or take a tagged spool off its lane and put it back."
+            )
 
     def _dispatch_transitions(self, snapshot):
         state = snapshot["state"]
