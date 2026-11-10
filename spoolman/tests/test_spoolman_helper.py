@@ -206,7 +206,7 @@ def test_a_tag_report_routes_through_resolution_to_the_tool_macro(tmp_path):
     notify(0, dict(TAGGED), False)
     gcode = printer.objects["gcode"]
     assert "SET_GCODE_VARIABLE MACRO=T0 VARIABLE=spool_id VALUE=104" in gcode.scripts
-    assert any("Tool T0 is using: ELEGOO PLA Matte" in line for line in gcode.responses)
+    assert any("Lane E0 is using: ELEGOO PLA Matte" in line for line in gcode.responses)
 
 
 def test_a_clear_report_releases_the_tool_macro(tmp_path):
@@ -235,10 +235,10 @@ def test_a_clear_report_keeps_the_pick_when_filament_is_still_there(tmp_path):
 def test_a_clear_report_keeps_a_manual_pick_and_reapplies_it(tmp_path):
     helper, printer = boot_helper(tmp_path)
     fetched = stub_spool_fetch(helper)
-    printer.objects["gcode_macro T0"].variables["spool_id"] = 55
+    helper.tracking.set_lane_spool(0, 55)
     notify = printer.objects["bespok3d_rfid"].notify_callbacks[0]
     new_scripts = scripts_after(printer, lambda: notify(0, None, True))
-    assert printer.objects["gcode_macro T0"].variables["spool_id"] == 55
+    assert helper.tracking.lane_spool(0) == 55
     assert helper.holders.spool_holders[0] is None
     assert fetched == [55]
     assert not any("VALUE=None" in script for script in new_scripts)
@@ -255,9 +255,9 @@ def test_a_clear_report_keeps_a_manual_pick_and_reapplies_it(tmp_path):
 
 
 def test_a_clear_report_releases_a_manual_pick_when_the_lane_is_empty(tmp_path):
-    _helper, printer = boot_helper(tmp_path)
+    helper, printer = boot_helper(tmp_path)
     printer.objects["print_task_config"].print_task_config["filament_exist"][0] = False
-    printer.objects["gcode_macro T0"].variables["spool_id"] = 55
+    helper.tracking.set_lane_spool(0, 55)
     notify = printer.objects["bespok3d_rfid"].notify_callbacks[0]
     new_scripts = scripts_after(printer, lambda: notify(0, None, True))
     assert "SET_GCODE_VARIABLE MACRO=T0 VARIABLE=spool_id VALUE=None" in new_scripts
@@ -285,11 +285,11 @@ def test_clearing_no_particular_lane_leaves_every_lane_name_alone(tmp_path):
 def test_detect_spools_reapplies_a_manual_pick_without_unbinding(tmp_path):
     helper, printer = boot_helper(tmp_path)
     fetched = stub_spool_fetch(helper)
-    printer.objects["gcode_macro T1"].variables["spool_id"] = 55
+    helper.tracking.set_lane_spool(1, 55)
     helper.holders.spool_holders[1] = {"VENDOR": "NONE", "MAIN_TYPE": "", "SPOOL_ID": None}
     helper.detect_spools()
     new_scripts = scripts_after(printer, lambda: finish_detect(helper, printer))
-    assert printer.objects["gcode_macro T1"].variables["spool_id"] == 55
+    assert helper.tracking.lane_spool(1) == 55
     assert fetched == [55]
     assert not any("VALUE=None" in script for script in new_scripts)
     assert any(

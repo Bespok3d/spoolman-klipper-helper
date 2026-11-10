@@ -55,7 +55,7 @@ class SpoolmanHelper:
         )
 
         self.holders = SpoolHolders(
-            self.logs, self.macros, self.push_spool_to_afc, self._lane_has_filament
+            self.logs, self.macros, self._release_lane, self._lane_has_filament
         )
         self.resolution = SpoolResolution(self)
         self.printer.lookup_object("webhooks").register_endpoint(
@@ -108,7 +108,7 @@ class SpoolmanHelper:
         self.clear_spool_for_channel(channel)
 
     # DETECT_SPOOLS asked for a fresh RFID read. A tag replaces whatever was there. No tag
-    # restores the pick captured before the re-read, from the tool macro or the AFC lane,
+    # restores the pick captured before the re-read, from the lane's tracking or the AFC lane,
     # without consulting filament_exist: this is a retry, not a pull.
     def _on_detect_report(self, channel, info, is_clear, pending_pick):
         if not is_clear and not is_untagged_filament(info):
@@ -136,12 +136,15 @@ class SpoolmanHelper:
     def tag_on_lane(self, channel):
         return self.holders.tag_on_lane(channel)
 
-    def remember_manual_spool(self, tool_index, spool_id):
-        self.manual_restore.remember(tool_index, spool_id)
+    def remember_manual_spool(self, lane, spool_id):
+        self.manual_restore.remember(lane, spool_id)
 
     def set_spool_for_channel(self, channel, filament_info):
         if self.holders.store_channel_report(channel, filament_info):
             self.apply_spool_for_extruder(channel)
+
+    def _release_lane(self, channel):
+        self.tracking.set_lane_spool(channel, None)
 
     def _lane_has_filament(self, channel):
         task = self.printer.lookup_object("print_task_config", None)

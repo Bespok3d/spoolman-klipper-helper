@@ -220,14 +220,21 @@ Each line is: **what you have** then how the name behaves, then how color/materi
   tag stays the source of truth for color, material and sub-type; the AFC name still comes from
   Spoolman. The one exception: when the tag's own Spoolman spool has more colours than the tag,
   that spool is written with `FORCE=1` all the same.
-- It acts only on the 4 physical lanes (the tools that map to physical extruders 0 to 3 in the
-  U1's virtual-tool table). A virtual tool with no physical mapping is skipped.
+- It acts only on the 4 physical lanes, E0 to E3. During a print the slicer can feed any tool from
+  any lane, and several tools can share one lane (for example T0 and T5 both on E2). The bridge
+  follows that map while the print is running or paused: a spool picked for a tool lands on the lane
+  that feeds it, and every tool on that lane shows the same spool. The map counts only the tools the
+  print uses (a print file that names none counts the tools a web interface declared for it, else
+  T0 to T3); any other tool is fed by no lane and shows no spool, and a spool picked on it is undone
+  with a warning. Two spools picked at the same moment for tools on one lane: one pick holds, and the
+  other is undone with a warning. Outside a print, T0 to T3 feed E0 to E3 and T4 and up feed no
+  lane.
 - Any spool change while a print is running or paused is **deferred**: the name updates live, and
   the color/material land the moment the print leaves printing/paused. This is by design: the
   printer resets its pressure advance every time it accepts that write, so a write landing
   mid-print would change how the running print extrudes (and the firmware can reject it outright).
-  Only the last change per lane is sent when the print ends, and it is dropped if the printer
-  already carries it.
+  Only the last change per lane is sent when the print ends. It is dropped if the printer already
+  carries it, or if the lane holds a different spool by then.
 - After installing or updating, Moonraker restarts and the AFC frontends' service worker may
   serve stale JavaScript. If a panel looks wrong, hard-refresh the browser.
 
@@ -269,8 +276,9 @@ slicer:
   that already have a Spoolman pick, chosen on the printer or in the AFC panel, keep that pick
   (color and material are written back if the firmware re-read blanked them). Untagged lanes with
   no pick are left as they are.
-- `DUMP_SPOOLS` prints what the bridge knows about each lane (labelled `T0:`..`T3:`; an empty lane
-  reads `empty`, a manually assigned one shows the spool).
+- `DUMP_SPOOLS` prints what the bridge knows about each lane, labelled by the lane and the tools fed
+  from it (`E2 (T0, T5):`; a lane no tool feeds reads just `E1:`). An empty lane reads `empty`, a
+  manually assigned one shows the spool.
 - `SH_CONFIG MODE=<auto|manual> LOGS=<level>` changes the module's behavior at runtime
   without a restart.
 - `SH_DEBUG [SKU=<sku>]` prints the current configuration; with a `SKU` it shows the spool

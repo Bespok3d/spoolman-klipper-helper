@@ -1,5 +1,12 @@
 # ruff: noqa: PLR2004  Tests assert against literal tool indexes.
 """The in-process watcher: transition detection and the baseline-not-transition first sample."""
+from klipper_fakes import (
+    REMAPPED_TABLE,
+    FakePrintStats,
+    FakePrintTaskConfig,
+    FakeSdcard,
+    write_remapped_gcode,
+)
 from spoolman.carrier_watch import (
     POLL_INTERVAL_SECONDS,
     CarrierWatch,
@@ -29,16 +36,6 @@ class FakeAfc:
         return {"current_lane": self.lane}
 
 
-class FakePrintStats:
-    def __init__(self, state):
-        self.state = state
-
-
-class FakePrintTaskConfig:
-    def __init__(self, exist):
-        self.print_task_config = {"filament_exist": exist}
-
-
 class FakePrinter:
     def __init__(self):
         self.objects = {}
@@ -59,6 +56,9 @@ class RecordingTracking:
     def error(self, message):
         self.calls.append(("error", message))
 
+    def warn(self, message):
+        self.calls.append(("warn", message))
+
     def on_primed(self, spool_by_tool, lane, afc_present, state=""):
         self.calls.append(("primed", dict(spool_by_tool), lane, afc_present))
 
@@ -77,6 +77,9 @@ class RecordingTracking:
     def on_print_left_active(self, lane, afc_present):
         self.calls.append(("left_active", lane, afc_present))
 
+    def on_map_changed(self):
+        self.calls.append(("map_changed",))
+
     def on_settle_tick(self):
         pass  # every-sample heartbeat for the settle window, not a transition
 
@@ -85,7 +88,9 @@ def build_watch(lane="E2", state="standby", exist=None, spool_ids=(None, None, N
     printer = FakePrinter()
     printer.objects["AFC"] = FakeAfc(lane)
     printer.objects["print_stats"] = FakePrintStats(state)
-    printer.objects["print_task_config"] = FakePrintTaskConfig(exist or [True] * 4)
+    printer.objects["print_task_config"] = FakePrintTaskConfig(
+        {"filament_exist": exist or [True] * 4}
+    )
     for tool_index, spool_id in enumerate(spool_ids):
         printer.objects[f"gcode_macro T{tool_index}"] = FakeMacro(spool_id)
     tracking = RecordingTracking()
@@ -120,7 +125,7 @@ def test_pick_mount_and_removal_transitions_fire_after_the_baseline():
     printer.objects["print_task_config"].print_task_config["filament_exist"] = [True, True, True, False]  # noqa: E501
     watch._sample()
     kinds = [call[0] for call in tracking.calls]
-    assert kinds == ["primed", "removed", "pick", "mount"]
+    assert kinds == ["primed", "pick", "removed", "mount"]
 
 
 class FakeAfcLane:
@@ -144,6 +149,124 @@ def test_afc_lane_spool_present_at_baseline_is_not_a_pick():
     watch._sample()
     assert all(call[0] != "lane_pick" for call in tracking.calls)
     assert watch.spool_by_lane[0] == 94
+
+
+# Stands for T0 and T1 sharing lane E2: a pick on T0 retells T1 and the lane.
+class LaneRetellingTracking(RecordingTracking):
+    def __init__(self, printer):
+        super().__init__()
+        self.printer = printer
+
+    def on_pick(self, tool_index, spool_id, state):
+        super().on_pick(tool_index, spool_id, state)
+        self.printer.objects["gcode_macro T1"].variables["spool_id"] = spool_id
+        self.printer.objects["AFC_lane E2"].spool_id = spool_id
+
+
+# T1 and E2 still show the helper's own write from before the T0 pick; reporting them would undo
+# that pick.
+def test_a_value_an_earlier_pick_of_the_same_sample_rewrote_is_not_reported_as_a_pick():
+    watch, printer, _recording = build_watch(state="printing")
+    printer.objects["AFC_lane E2"] = FakeAfcLane()
+    tracking = LaneRetellingTracking(printer)
+    watch.tracking = tracking
+    watch._sample()
+    printer.objects["gcode_macro T0"].variables["spool_id"] = 104
+    printer.objects["gcode_macro T1"].variables["spool_id"] = 80
+    printer.objects["AFC_lane E2"].spool_id = 80
+    watch._sample()
+    reported_picks = [call for call in tracking.calls if call[0] in ("pick", "lane_pick")]
+    assert reported_picks == [("pick", 0, 104, "printing")]
+    assert [call[0] for call in tracking.calls].count("warn") == 2
+
+
+# The T0 pick made the helper tell T1 the same spool; putting T1 back to the spool it held before
+# that is a new pick, not a value the watcher already saw.
+def test_a_tool_put_back_to_its_value_from_before_a_helper_write_is_a_pick():
+    watch, printer, _recording = build_watch(state="printing", spool_ids=(None, 80, None, None))
+    printer.objects["AFC_lane E2"] = FakeAfcLane()
+    tracking = LaneRetellingTracking(printer)
+    watch.tracking = tracking
+    watch._sample()
+    printer.objects["gcode_macro T0"].variables["spool_id"] = 104
+    watch._sample()
+    printer.objects["gcode_macro T1"].variables["spool_id"] = 80
+    watch._sample()
+    reported_picks = [call for call in tracking.calls if call[0] == "pick"]
+    assert reported_picks == [("pick", 0, 104, "printing"), ("pick", 1, 80, "printing")]
+
+
+# Clearing T0 retells T1 as None; T1 cleared in the same sample with 0 names that same empty
+# spool, so it is no clash to warn about.
+def test_a_pick_naming_the_same_spool_another_way_is_not_dropped():
+    watch, printer, _recording = build_watch(state="printing", spool_ids=(80, 80, None, None))
+    printer.objects["AFC_lane E2"] = FakeAfcLane(spool_id=80)
+    tracking = LaneRetellingTracking(printer)
+    watch.tracking = tracking
+    watch._sample()
+    printer.objects["gcode_macro T0"].variables["spool_id"] = None
+    printer.objects["gcode_macro T1"].variables["spool_id"] = 0
+    watch._sample()
+    reported_picks = [call for call in tracking.calls if call[0] == "pick"]
+    assert reported_picks == [("pick", 0, None, "printing"), ("pick", 1, 0, "printing")]
+    assert "warn" not in [call[0] for call in tracking.calls]
+
+
+class FailingPickTracking(RecordingTracking):
+    def on_pick(self, tool_index, spool_id, state):
+        raise OSError("disk full")
+
+
+# The sample is already taken as the new baseline, so a transition skipped after a failing pick
+# would never be reported: here the print-end drain.
+def test_a_failing_pick_is_reported_and_the_rest_of_its_sample_still_runs():
+    watch, printer, _recording = build_watch(state="printing")
+    tracking = FailingPickTracking()
+    watch.tracking = tracking
+    watch._sample()
+    printer.objects["gcode_macro T0"].variables["spool_id"] = 104
+    printer.objects["print_stats"].state = "standby"
+    watch._sample()
+    assert ("error", "carrier watch: on_pick: disk full") in tracking.calls
+    assert ("left_active", "E2", True) in tracking.calls
+
+
+def test_a_remapping_print_reports_a_map_change_and_a_pick_on_t5(tmp_path):
+    watch, printer, tracking = build_watch(spool_ids=(None,) * 6)
+    printer.objects["print_task_config"].print_task_config["extruder_map_table"] = REMAPPED_TABLE
+    printer.objects["virtual_sdcard"] = FakeSdcard(write_remapped_gcode(tmp_path))
+    watch._sample()
+    printer.objects["print_stats"].state = "printing"
+    printer.objects["gcode_macro T5"].variables["spool_id"] = 104
+    watch._sample()
+    picks_and_map_changes = [call for call in tracking.calls if call[0] in ("map_changed", "pick")]
+    assert picks_and_map_changes == [("pick", 5, 104, "printing"), ("map_changed",)]
+
+
+# A pick in a sample may be the echo of the helper's own write; the tracking can tell it apart only
+# while the tool still holds that write, before a map change or a pulled filament retells it.
+def test_picks_are_dispatched_before_the_map_change_and_the_pulled_filament_of_their_sample():
+    watch, printer, tracking = build_watch(state="printing")
+    task_config = printer.objects["print_task_config"].print_task_config
+    watch._sample()
+    printer.objects["gcode_macro T0"].variables["spool_id"] = 104
+    printer.objects["AFC_lane E0"] = FakeAfcLane(spool_id=94)
+    task_config["extruder_map_table"] = [2, 0, 0, 0]
+    task_config["filament_exist"] = [True, True, False, True]
+    watch._sample()
+    kinds = [call[0] for call in tracking.calls]
+    assert kinds == ["primed", "pick", "lane_pick", "map_changed", "removed"]
+
+
+def test_auto_replenish_moving_a_tool_mid_print_reports_a_map_change(tmp_path):
+    watch, printer, tracking = build_watch(state="printing", spool_ids=(None,) * 6)
+    task_config = printer.objects["print_task_config"].print_task_config
+    task_config["extruder_map_table"] = list(REMAPPED_TABLE)
+    printer.objects["virtual_sdcard"] = FakeSdcard(write_remapped_gcode(tmp_path))
+    watch._sample()
+    task_config["extruder_map_table"][0] = 3
+    watch._sample()
+    assert tracking.calls[1:] == [("map_changed",)]  # the first sample is the baseline
 
 
 def test_leaving_an_active_print_fires_drain():

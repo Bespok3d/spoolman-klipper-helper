@@ -33,9 +33,6 @@ class RecordingMacros:
     def get_spool_id_for_tool(self, tool_id):
         return self.spool_id_by_tool.get(tool_id)
 
-    def set_spool_id_for_tool(self, tool, spool_id):
-        pass
-
     def clear_print_task_config(self, channel):
         pass
 
@@ -64,9 +61,13 @@ class FakeU1Tools:
 class RecordingResolution:
     def __init__(self):
         self.applied_extruders = []
+        self.manual_pick_by_lane = {}
 
     def apply_spool_for_extruder(self, extruder):
         self.applied_extruders.append(extruder)
+
+    def current_manual_pick(self, lane):
+        return self.manual_pick_by_lane.get(lane)
 
 
 def build_detection(tmp_path, spools_config, rfid_data=None, mode="auto", extruder_by_tool=None):
@@ -84,7 +85,7 @@ def build_detection(tmp_path, spools_config, rfid_data=None, mode="auto", extrud
         mode=mode,
         push_spool_to_afc=lambda channel, spool_id: afc_pushes.append((channel, spool_id)),
     )
-    helper.holders = SpoolHolders(logs, macros, helper.push_spool_to_afc, lambda channel: True)
+    helper.holders = SpoolHolders(logs, macros, lambda channel: None, lambda channel: True)
     helper.resolution = RecordingResolution()
     helper.printer = types.SimpleNamespace(lookup_object=lambda *args, **kwargs: None)
     detection = SpoolDetection(helper, str(rfid_data_path))
@@ -129,24 +130,11 @@ def test_detect_sends_every_lane_through_resolution_including_untagged_picks(tmp
     )
     helper.holders.spool_holders[0] = dict(TAGGED)
     helper.holders.spool_holders[1] = {"VENDOR": "NONE", "MAIN_TYPE": "", "SPOOL_ID": None}
-    helper.macros.spool_id_by_tool[1] = 55
+    helper.resolution.manual_pick_by_lane[1] = 55
     detection.detect_spools()
     assert helper.macros.detected_channels == [0, 1, 2, 3]
     assert helper.resolution.applied_extruders == []
     assert detection.pending_picks == {0: None, 1: 55, 2: None, 3: None}
-
-
-def test_detect_snapshots_an_afc_lane_pick_when_the_macro_is_empty(tmp_path):
-    detection, helper, _afc_pushes = build_detection(
-        tmp_path, spools_config=[{}, {}]
-    )
-    lane = types.SimpleNamespace(spool_id=94)
-    helper.printer.lookup_object = (
-        lambda name, default=None, lane=lane: lane if name == "AFC_lane E0" else default
-    )
-    detection.detect_spools()
-    assert detection.pending_picks[0] == 94
-    assert helper.resolution.applied_extruders == []
 
 
 def test_sync_in_auto_mode_is_a_noop_because_the_map_is_live(tmp_path):
@@ -156,12 +144,14 @@ def test_sync_in_auto_mode_is_a_noop_because_the_map_is_live(tmp_path):
     assert afc_pushes == []
 
 
-def test_sync_in_manual_mode_resolves_every_pick_and_mirrors_mapped_tools(tmp_path):
+def test_sync_in_manual_mode_caches_every_pick_and_leaves_the_lanes_to_the_tracking(tmp_path):
+    # T0 and T5 both feed E2 in this print. Mirroring each tool onto its lane put T5's spool on
+    # E2 after T0's, whichever the lane really held; the lane's spool is the tracking's to keep.
     detection, helper, afc_pushes = build_detection(
-        tmp_path, spools_config=[], mode="manual", extruder_by_tool={2: 2}
+        tmp_path, spools_config=[], mode="manual", extruder_by_tool={0: 2, 1: 0, 5: 2}
     )
-    helper.macros.spool_id_by_tool[2] = 55
-    helper.macros.spool_id_by_tool[7] = 80  # picked but unmapped: cached, no AFC mirror
+    helper.macros.spool_id_by_tool[0] = 55
+    helper.macros.spool_id_by_tool[5] = 80
     detection.sync_spools_tools()
     assert helper.holders.spools_by_id == {55: {"id": 55}, 80: {"id": 80}}
-    assert afc_pushes == [(2, 55)]
+    assert afc_pushes == []

@@ -1,13 +1,11 @@
 """The active-spool rule: which Spoolman spool is actually consuming filament right now.
 
-Three rules, recomputed from current state (never edge-triggered): the mounted lane's resolved
-spool is active; no lane mounted means no active spool; no spool loaded anywhere also means no
-active spool. Ground truth for a physical extruder is its OWN native tool index (tool N's home
-extruder is N, how DETECT_SPOOLS populates it before any print-specific remap). Snapmaker's
-virtual tooling can route OTHER logical tools onto an already-used extruder, but a borrowed
-tool's spool_id belongs to ITS OWN native channel and is stale noise here: the home tool always
-wins when it has a resolved spool, and borrowed claimants are only considered when the home tool
-is empty AND they agree on a single distinct value (a genuine tie is unknown, never a guess).
+Three rules, recomputed from current state (never edge-triggered): the mounted lane's spool is
+active; no lane mounted means no active spool; no spool loaded anywhere also means no active
+spool. The spool is the LANE's, never a tool's: Snapmaker's virtual tooling can feed any logical
+tool from any lane and several tools from one, so what a tool number holds says nothing about a
+lane until the tool-to-extruder map is read. The caller keeps one spool per lane, filled through
+that map.
 """
 
 
@@ -45,14 +43,14 @@ def physical_extruder_for_tool(extruder_map_table, tool_index):
     return mapped if isinstance(mapped, int) else None
 
 
-def resolve_active_spool(current_lane, spool_by_tool, extruder_map_table):
+def resolve_active_spool(current_lane, spool_by_lane):
     physical_extruder = physical_extruder_from_lane(current_lane)
     if physical_extruder is None:
         return None
-    home_spool = coerce_spool_id(spool_by_tool.get(physical_extruder))
-    if home_spool is not None:
-        return home_spool
-    claimants = tools_for_physical_extruder(extruder_map_table, physical_extruder)
-    resolved_spools = {coerce_spool_id(spool_by_tool.get(tool_index)) for tool_index in claimants}
-    resolved_spools.discard(None)
-    return resolved_spools.pop() if len(resolved_spools) == 1 else None
+    return coerce_spool_id(spool_by_lane.get(physical_extruder))
+
+
+def lane_label(extruder_map_table, physical_extruder):
+    tools = tools_for_physical_extruder(extruder_map_table, physical_extruder)
+    tool_names = ", ".join(f"T{tool_index}" for tool_index in tools)
+    return f"E{physical_extruder} ({tool_names})" if tool_names else f"E{physical_extruder}"

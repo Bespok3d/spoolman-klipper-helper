@@ -1,20 +1,23 @@
 """The single owner of Spoolman consumption tracking, in-process.
 
-Reacts to the carrier watcher's transitions: a widget pick mirrors the spool onto the printer's
-screen and AFC lane (deferred while printing: the firmware write is the risky part, the tracking
-is not), a carrier mount/park recomputes the active spool (a mid-print park gap is transient and
-never pushed; a settled carrier-empty clears), a pulled filament releases its lane, and print
-end drains the deferred writes. Every user-visible change speaks through the helper's own Logs
+Keeps one spool per lane (physical extruder) and reaches it through the live tool-to-extruder
+map: a widget pick on a tool lands on the lane the map feeds that tool from, and every tool the
+map feeds from that lane is told the same spool. The lane's spool is mirrored onto the printer's
+screen and AFC lane (the screen write is deferred while printing: the firmware write is the risky
+part, the tracking is not), a carrier mount/park recomputes the active spool (a mid-print park
+gap is transient and never pushed; a settled carrier-empty clears), a map change tells every tool
+the spool of the lane it is fed from now, a pulled filament releases its lane, and print end
+drains the deferred writes. Every user-visible change speaks through the helper's own Logs
 library: this module never fabricates console output any other way.
 """
 from .active_spool import (
     coerce_spool_id,
     physical_extruder_for_tool,
     resolve_active_spool,
+    tools_for_physical_extruder,
 )
-from .carrier_watch import ACTIVE_PRINT_STATES
 from .filament_info import filament_info_from_spoolman, filament_info_to_string
-from .u1_tools import EXTRUDERS_COUNT, live_extruder_map
+from .u1_tools import ACTIVE_PRINT_STATES, EXTRUDERS_COUNT, live_extruder_map, print_state
 
 _ACTIVE_UNRESOLVED = object()
 # A toolchange's park->pick gap is 1-3s of carrier-empty that means NOTHING is settled; an eject
@@ -33,7 +36,9 @@ class SpoolTracking:
         self.track_location = track_location and bool(location)
         self.location = location
         self.spool_by_tool = {}
-        self.pending_by_tool = {}
+        self.spool_by_lane = {}
+        self.pending_by_lane = {}
+        self.primed = False
         self.lane = None
         self.afc_present = False
         self.print_state = ""
@@ -43,32 +48,132 @@ class SpoolTracking:
     def _extruder_map(self):
         return live_extruder_map(self.printer)
 
+    def lane_spool(self, lane):
+        return self.spool_by_lane.get(lane)
+
     def on_primed(self, spool_by_tool, lane, afc_present, state=""):
         self.spool_by_tool = dict(spool_by_tool)
         self.lane = lane
         self.afc_present = afc_present
         self.print_state = state
+        self._seed_lanes_from_tools()
+        self._line_up_sampled_tools()
+        self.primed = True
         if afc_present:
             self._reconcile_active()
 
+    # A lane already set before the first sample (a restored pick, an early tag bind) keeps that
+    # spool; every other lane starts from the first tool the map feeds from it that names one.
+    def _seed_lanes_from_tools(self):
+        extruder_map = self._extruder_map()
+        for lane in range(EXTRUDERS_COUNT):
+            self.spool_by_lane.setdefault(lane, self._first_tool_spool(extruder_map, lane))
+
+    # A restart mid-print can find two tools on one lane naming different spools, and a tool left
+    # from the last print can still name a spool while it is fed by no lane: every sampled tool is
+    # told the spool of the lane it is fed from now.
+    def _line_up_sampled_tools(self):
+        extruder_map = self._extruder_map()
+        for tool_index in list(self.spool_by_tool):
+            lane = physical_extruder_for_tool(extruder_map, tool_index)
+            self._tell_tool(tool_index, self.spool_by_lane.get(lane))
+
+    def _first_tool_spool(self, extruder_map, lane):
+        tool_spools = (
+            coerce_spool_id(self.spool_by_tool.get(tool_index))
+            for tool_index in tools_for_physical_extruder(extruder_map, lane)
+        )
+        return next((spool_id for spool_id in tool_spools if spool_id is not None), None)
+
+    # The watcher reports every macro change, the helper's own writes included; a value the tool
+    # was already told is that echo, not a pick.
     def on_pick(self, tool_index, spool_id, state):
         self.print_state = state
-        previous = coerce_spool_id(self.spool_by_tool.get(tool_index))
-        self.spool_by_tool[tool_index] = spool_id
         picked = coerce_spool_id(spool_id)
-        self.helper.remember_manual_spool(tool_index, picked)
+        if picked == coerce_spool_id(self.spool_by_tool.get(tool_index)):
+            return
+        self.spool_by_tool[tool_index] = picked
+        lane = physical_extruder_for_tool(self._extruder_map(), tool_index)
+        if lane is None:
+            self._undo_pick_on_a_tool_fed_by_no_lane(tool_index, picked)
+            return
+        self.pick_for_lane(lane, picked)
+
+    # A tool the map feeds from no lane (one the print does not use, or T4 and up between prints)
+    # has no spool to show, so a pick on it is undone, and said so.
+    def _undo_pick_on_a_tool_fed_by_no_lane(self, tool_index, picked):
+        if picked is not None:
+            self.logs.warn(f"T{tool_index} is fed by no lane now: spool {picked} ignored")
+        self._tell_tool(tool_index, None)
+
+    # A pick by hand: from a tool, the AFC panel, a restored pick or a pulled filament. The whole
+    # pick cascade runs.
+    def pick_for_lane(self, lane, spool_id):
+        picked = coerce_spool_id(spool_id)
+        previous = self._store_lane_spool(lane, picked)
+        self._after_pick(lane, previous, picked)
+
+    # A bind, an unbind, a re-applied pick or a cleared lane: the pick cascade runs as it did when
+    # the caller's own macro write came back through the watcher, so only for a real change once
+    # the watcher is primed.
+    def set_lane_spool(self, lane, spool_id):
+        picked = coerce_spool_id(spool_id)
+        previous = self._store_lane_spool(lane, picked)
+        if self.primed and previous != picked:
+            self._after_pick(lane, previous, picked)
+
+    def _store_lane_spool(self, lane, picked):
+        previous = self.spool_by_lane.get(lane)
+        self.spool_by_lane[lane] = picked
+        self._tell_tools_on_lane(self._extruder_map(), lane)
+        self.helper.push_spool_to_afc(lane, picked)
+        return previous
+
+    def _tell_tools_on_lane(self, extruder_map, lane):
+        lane_spool_id = self.spool_by_lane.get(lane)
+        for tool_index in tools_for_physical_extruder(extruder_map, lane):
+            self._tell_tool(tool_index, lane_spool_id)
+
+    # Before the first sample a tool's value is unknown, not none: a cleared lane must still clear
+    # its tools.
+    def _tell_tool(self, tool_index, spool_id):
+        known = tool_index in self.spool_by_tool
+        if known and coerce_spool_id(self.spool_by_tool[tool_index]) == spool_id:
+            return
+        self.spool_by_tool[tool_index] = spool_id
+        self.helper.macros.set_spool_id_for_tool(f"T{tool_index}", spool_id)
+
+    def _after_pick(self, lane, previous, picked):
+        self.helper.remember_manual_spool(lane, picked)
         self._track_location_change(previous, picked)
-        self.helper.push_spool_to_afc(tool_index, picked)
-        if state in ACTIVE_PRINT_STATES:
-            self.pending_by_tool[tool_index] = picked
+        self.print_state = print_state(self.printer)
+        if self.print_state in ACTIVE_PRINT_STATES:
+            self.pending_by_lane[lane] = picked
         else:
-            self._write_screen(tool_index, picked)
+            self._write_screen(lane, picked)
         if self.afc_present:
             self._reconcile_active()
         elif picked is not None:
             # No carrier concept at all: a pick is the only signal, as on a single-extruder
             # printer where "selected" and "mounted" are the same thing.
             self._apply_active(picked)
+
+    # A print sets the map at start and puts the home map back at its end, and auto replenish
+    # moves a tool to another lane mid-print: each time, every tool is told the spool of the lane
+    # it is fed from now, and a tool fed by no lane is told none. The lanes' spools do not move,
+    # so the active spool stays as it was.
+    def on_map_changed(self):
+        extruder_map = self._extruder_map()
+        for lane in self.spool_by_lane:
+            self._tell_tools_on_lane(extruder_map, lane)
+        for tool_index in self._tools_fed_by_no_lane(extruder_map):
+            self._tell_tool(tool_index, None)
+
+    def _tools_fed_by_no_lane(self, extruder_map):
+        return [
+            tool_index for tool_index in self.spool_by_tool
+            if physical_extruder_for_tool(extruder_map, tool_index) is None
+        ]
 
     def on_mount_changed(self, lane, afc_present, state):
         self.lane = lane
@@ -77,37 +182,33 @@ class SpoolTracking:
         self._reconcile_active()
 
     # A spool chosen in the AFC panel's own selection dialog (SET_SPOOL_ID -> a lane attribute
-    # nothing else reads). Routed onto the lane's home tool macro so the ONE existing pick
-    # cascade runs: screen write, Spoolman widget, location, active recompute. An RFID-identified
-    # lane is left alone (the tag is the source of truth), and a value that already matches the
-    # tool is the echo of our own push-back, not a user action.
+    # nothing else reads), made a pick on that lane so the ONE existing pick cascade runs: tool
+    # macros, screen write, Spoolman widget, location, active recompute. An RFID-identified lane
+    # is left alone (the tag is the source of truth), and a value that already matches the lane
+    # is the echo of our own push-back, not a user action.
     def on_afc_lane_pick(self, lane_index, spool_id, state):
         self.print_state = state
         picked = coerce_spool_id(spool_id)
         if self.helper.lane_is_tagged(lane_index):
             if picked is not None:
                 self.logs.warn(
-                    f"AFC pick ignored for T{lane_index}: lane has an RFID-identified spool"
+                    f"AFC pick ignored for E{lane_index}: lane has an RFID-identified spool"
                 )
             return
-        if picked == coerce_spool_id(self.spool_by_tool.get(lane_index)):
+        if picked == self.lane_spool(lane_index):
             return
-        self.logs.log(f"AFC panel pick: spool {picked or 'none'} -> T{lane_index}")
-        self.helper.macros.set_spool_id_for_tool(f"T{lane_index}", picked)
-        self.on_pick(lane_index, picked, state)
+        self.logs.log(f"AFC panel pick: spool {picked or 'none'} -> E{lane_index}")
+        self.pick_for_lane(lane_index, picked)
 
     # Mid-print a runout is the firmware's to handle; only an idle pull releases the lane's
     # manual assignment (an untagged spool fires no RFID event when removed).
     def on_filament_removed(self, extruder, state):
         if state in ACTIVE_PRINT_STATES:
             return
-        extruder_map = self._extruder_map()
-        for tool_index in range(EXTRUDERS_COUNT):
-            mapped = physical_extruder_for_tool(extruder_map, tool_index)
-            has_spool = coerce_spool_id(self.spool_by_tool.get(tool_index)) is not None
-            if mapped == extruder and has_spool:
-                self.logs.log(f"Filament pulled from extruder {extruder}, releasing T{tool_index}")
-                self.helper.macros.set_spool_id_for_tool(f"T{tool_index}", None)
+        if self.lane_spool(extruder) is None:
+            return
+        self.logs.log(f"Filament pulled from extruder {extruder}, releasing lane E{extruder}")
+        self.pick_for_lane(extruder, None)
 
     # Only drains what was held back while the print ran: the writer's filament config writes
     # first, then the deferred screen writes, so a spool picked by hand during the print has the
@@ -117,11 +218,11 @@ class SpoolTracking:
     def on_print_left_active(self, lane, afc_present):
         self.lane = lane
         self.print_state = ""
-        self.writer.release_writes_held_during_print(self.helper.tag_on_lane)
-        pending = self.pending_by_tool
-        self.pending_by_tool = {}
-        for tool_index, spool_id in pending.items():
-            self._write_screen(tool_index, spool_id)
+        self.writer.release_writes_held_during_print(self.helper.tag_on_lane, self.lane_spool)
+        pending = self.pending_by_lane
+        self.pending_by_lane = {}
+        for pending_lane, spool_id in pending.items():
+            self._write_screen(pending_lane, spool_id)
 
     # Every explicit clear (print end/cancel, CLEAR_ALL_SPOOLS) goes through here, never straight
     # to spoolman: a bypass leaves self.active_spool stale, and the next same-tool macro push
@@ -147,7 +248,7 @@ class SpoolTracking:
             self._apply_active(picked)
 
     def _reconcile_active(self):
-        resolved = resolve_active_spool(self.lane, self.spool_by_tool, self._extruder_map())
+        resolved = resolve_active_spool(self.lane, self.spool_by_lane)
         if resolved is not None:
             self.carrier_empty_since = None
             self._apply_active(resolved)
@@ -188,22 +289,19 @@ class SpoolTracking:
             return filament_info_to_string(known, self.helper.logging)
         return f"Spoolman spool {spool_id}"
 
-    def _write_screen(self, tool_index, spool_id):
-        extruder = physical_extruder_for_tool(self._extruder_map(), tool_index)
-        if extruder is None:
-            return
+    def _write_screen(self, lane, spool_id):
         if spool_id is None:
-            self.writer.clear_extruder(extruder)
+            self.writer.clear_extruder(lane)
             return
 
         # The fetched spool doubles as label data: cached in the tag shape (never clobbering a
         # real tag's entry), a manual pick logs like a tagged one instead of "Spoolman spool N".
-        def on_spool(spool, target_extruder=extruder, picked=spool_id):
-            if spool:
+        # An answer that arrives after the lane changed spool belongs to a spool the lane no longer
+        # holds and is dropped.
+        def on_spool(spool, target_lane=lane, picked=spool_id):
+            if spool and self.lane_spool(target_lane) == picked:
                 self.helper.spools_by_id.setdefault(picked, filament_info_from_spoolman(spool))
-                self.writer.apply_spool(
-                    target_extruder, spool, self.helper.tag_on_lane(target_extruder)
-                )
+                self.writer.apply_spool(target_lane, spool, self.helper.tag_on_lane(target_lane))
 
         self.spoolman.fetch_spool(spool_id, on_spool)
 

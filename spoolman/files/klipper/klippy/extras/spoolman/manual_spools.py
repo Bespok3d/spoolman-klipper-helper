@@ -1,9 +1,9 @@
 """Persistence for manually picked spools, which have no tag to re-read after a restart.
 
-Mirrors rfid_data.json: one JSON file in the bespok3d data dir mapping tool index -> Spoolman
-spool id, rewritten on every manual pick change and replayed at klippy-ready. Only untagged
-lanes ever land here (a tagged lane's identity comes back from its tag). Written atomically so
-a power loss mid-write cannot corrupt the file into losing every pick.
+Mirrors rfid_data.json: one JSON file in the bespok3d data dir mapping lane (physical extruder)
+index -> Spoolman spool id, rewritten on every manual pick change and replayed at klippy-ready.
+Only untagged lanes ever land here (a tagged lane's identity comes back from its tag). Written
+atomically so a power loss mid-write cannot corrupt the file into losing every pick.
 """
 import json
 import os

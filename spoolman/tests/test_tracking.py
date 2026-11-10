@@ -1,6 +1,13 @@
 # ruff: noqa: PLR2004  Tests assert against literal spool ids and extruder indexes.
 """The tracking coordinator: the three active-spool rules end to end, deferral, release,
 location, and the console voice going through the helper's own Logs (never fabricated)."""
+from klipper_fakes import (
+    REMAPPED_TABLE,
+    FakePrintStats,
+    FakePrintTaskConfig,
+    FakeSdcard,
+    write_remapped_gcode,
+)
 from spoolman.print_task_writer import PrintTaskWriter
 from spoolman.tracking import SpoolTracking
 
@@ -9,6 +16,12 @@ SPOOL = {
     "filament": {"name": "PLA Basic", "material": "PLA", "color_hex": "2850E0",
                  "vendor": {"name": "Flashforge"}},
 }
+OTHER_SPOOL = {
+    "id": 80,
+    "filament": {"name": "PETG Tough", "material": "PETG", "color_hex": "E02828",
+                 "vendor": {"name": "Polymaker"}},
+}
+SPOOLMAN_RECORDS = {104: SPOOL, 80: OTHER_SPOOL}
 
 
 class RecordingLogs:
@@ -34,8 +47,7 @@ class RecordingMacros:
 
 
 class RecordingSpoolman:
-    def __init__(self, spool_payload=SPOOL):
-        self.spool_payload = spool_payload
+    def __init__(self):
         self.active_spool_calls = []
         self.location_calls = []
 
@@ -43,10 +55,23 @@ class RecordingSpoolman:
         self.active_spool_calls.append(spool_id)
 
     def fetch_spool(self, spool_id, on_spool):
-        on_spool(self.spool_payload)
+        on_spool(SPOOLMAN_RECORDS.get(spool_id))
 
     def patch_location(self, spool_id, location):
         self.location_calls.append((spool_id, location))
+
+
+class LateAnsweringSpoolman(RecordingSpoolman):
+    def __init__(self):
+        super().__init__()
+        self.unanswered_fetches = []
+
+    def fetch_spool(self, spool_id, on_spool):
+        self.unanswered_fetches.append((spool_id, on_spool))
+
+    def answer_every_fetch(self):
+        for spool_id, on_spool in self.unanswered_fetches:
+            on_spool(SPOOLMAN_RECORDS.get(spool_id))
 
 
 class FakeHelper:
@@ -71,13 +96,8 @@ class FakeHelper:
     def lane_is_tagged(self, channel):
         return channel in self.tags_on_lanes
 
-    def remember_manual_spool(self, tool_index, spool_id):
-        self.remembered.append((tool_index, spool_id))
-
-
-class FakePrintTaskConfig:
-    def __init__(self, config):
-        self.print_task_config = config
+    def remember_manual_spool(self, lane, spool_id):
+        self.remembered.append((lane, spool_id))
 
 
 class FakeReactor:
@@ -88,19 +108,19 @@ class FakeReactor:
         return self.now
 
 
-class FakePrintStats:
-    def __init__(self, state):
-        self.state = state
-
-
 class FakePrinter:
-    def __init__(self, task_config, print_state=""):
+    def __init__(self, task_config, print_state="", gcode_path=None):
         self.task = FakePrintTaskConfig(task_config)
         self.print_stats = FakePrintStats(print_state)
+        self.sdcard = FakeSdcard(gcode_path)
         self.reactor = FakeReactor()
 
     def lookup_object(self, name, default=None):
-        objects = {"print_task_config": self.task, "print_stats": self.print_stats}
+        objects = {
+            "print_task_config": self.task,
+            "print_stats": self.print_stats,
+            "virtual_sdcard": self.sdcard,
+        }
         return objects.get(name, default)
 
     def get_reactor(self):
@@ -118,8 +138,10 @@ def task_config(extruder_map=None):
     }
 
 
-def build_tracking(extruder_map=None, track_location=False, location="", print_state=""):
-    printer = FakePrinter(task_config(extruder_map), print_state)
+def build_tracking(
+    extruder_map=None, track_location=False, location="", print_state="", gcode_path=None,
+):
+    printer = FakePrinter(task_config(extruder_map), print_state, gcode_path)
     logs = RecordingLogs()
     macros = RecordingMacros()
     spoolman = RecordingSpoolman()
@@ -184,10 +206,11 @@ def test_print_end_drains_writes_and_clear_active_resets_ground_truth():
     # THE stale-state regression: a print-end clear that bypasses tracking leaves active_spool
     # stale, and the next print starting with the SAME tool gets equal-skipped -- no consumption
     # tracked until its first toolchange. clear_active is the only legal clear.
-    tracking, spoolman, macros, _logs = build_tracking()
+    tracking, spoolman, macros, _logs = build_tracking(print_state="printing")
     tracking.on_primed({}, "E2", afc_present=True)
     tracking.on_pick(2, 104, "printing")
     assert all(not cmd.startswith("SET_PRINT_FILAMENT_CONFIG") for cmd in macros.commands)
+    tracking.printer.print_stats.state = "complete"
     tracking.on_print_left_active("E2", True)  # deferred firmware writes drain...
     assert any(cmd.startswith("SET_PRINT_FILAMENT_CONFIG") for cmd in macros.commands)
     tracking.clear_active()                    # ...and print_lifecycle clears through tracking
@@ -201,6 +224,7 @@ def test_print_end_sends_the_filament_config_the_writer_held_during_the_print():
     # writer is what holds that firmware write back, and print end is what lets it go. The
     # firmware resets the live extruder's pressure advance on every write it takes.
     tracking, _spoolman, macros, _logs = build_tracking(print_state="printing")
+    tracking.set_lane_spool(2, 104)  # a tag bind names the lane's spool, then writes its config
     tracking.writer.apply_spool(2, SPOOL)
     assert all(not cmd.startswith("SET_PRINT_FILAMENT_CONFIG") for cmd in macros.commands)
     tracking.printer.print_stats.state = "complete"
@@ -341,7 +365,7 @@ def test_without_afc_the_macro_trigger_applies_directly():
     assert spoolman.active_spool_calls == [80]
 
 
-def test_afc_panel_pick_lands_on_the_lanes_home_tool():
+def test_afc_panel_pick_lands_on_the_lanes_tool_outside_a_print():
     tracking, _spoolman, macros, logs = build_tracking()
     tracking.on_primed({}, None, afc_present=True)
     tracking.on_afc_lane_pick(0, 94, "standby")
@@ -367,3 +391,185 @@ def test_our_own_afc_pushback_echo_is_not_a_pick():
     tracking.on_primed({0: 94}, None, afc_present=True)
     tracking.on_afc_lane_pick(0, 94, "standby")
     assert macros.tool_spool_sets == []
+
+
+def build_remapped_print(tmp_path, print_state="printing"):
+    return build_tracking(
+        REMAPPED_TABLE, print_state=print_state, gcode_path=write_remapped_gcode(tmp_path)
+    )
+
+
+def test_a_pick_on_a_remapped_tool_lands_on_the_lane_it_is_fed_from(tmp_path):
+    tracking, _spoolman, macros, _logs = build_remapped_print(tmp_path)
+    tracking.on_primed({}, None, afc_present=True, state="printing")
+    tracking.on_pick(0, 104, "printing")
+    assert tracking.lane_spool(2) == 104
+    assert tracking.helper.afc_pushes == [(2, 104)]
+    assert tracking.helper.remembered == [(2, 104)]
+    assert macros.tool_spool_sets == [("T5", 104)]  # T5 shares E2
+    assert tracking.pending_by_lane == {2: 104}
+    tracking.printer.print_stats.state = "complete"
+    tracking.on_print_left_active(None, True)
+    filament_writes = [cmd for cmd in macros.commands if cmd.startswith("SET_PRINT_FILAMENT")]
+    assert len(filament_writes) == 1
+    assert filament_writes[0].startswith("SET_PRINT_FILAMENT_CONFIG CONFIG_EXTRUDER=2")
+    assert "Flashforge" in filament_writes[0]
+
+
+def test_the_watchers_echo_of_a_shared_lane_write_is_not_a_new_pick(tmp_path):
+    tracking, _spoolman, macros, _logs = build_remapped_print(tmp_path)
+    tracking.on_primed({}, None, afc_present=True, state="printing")
+    tracking.on_pick(0, 104, "printing")
+    tracking.on_pick(5, 104, "printing")  # the watcher sees the T5 write the pick made
+    assert tracking.helper.remembered == [(2, 104)]
+    assert macros.tool_spool_sets == [("T5", 104)]
+
+
+def test_a_pick_on_a_tool_the_print_does_not_use_touches_no_lane_and_is_undone(tmp_path):
+    tracking, _spoolman, macros, logs = build_remapped_print(tmp_path)
+    tracking.on_primed({}, None, afc_present=True, state="printing")
+    tracking.on_pick(3, 55, "printing")
+    assert tracking.lane_spool(0) is None
+    assert tracking.helper.afc_pushes == []
+    assert macros.tool_spool_sets == [("T3", None)]
+    assert logs.lines == ["T3 is fed by no lane now: spool 55 ignored"]
+
+
+def test_a_pick_on_a_tool_already_told_none_is_still_undone(tmp_path):
+    tracking, _spoolman, macros, _logs = build_remapped_print(tmp_path)
+    tracking.on_primed({3: None}, None, afc_present=True, state="printing")
+    tracking.on_pick(3, 55, "printing")
+    assert macros.tool_spool_sets == [("T3", None)]
+
+
+def test_the_watchers_echo_of_an_undone_pick_is_not_a_new_pick(tmp_path):
+    tracking, _spoolman, macros, logs = build_remapped_print(tmp_path)
+    tracking.on_primed({}, None, afc_present=True, state="printing")
+    tracking.on_pick(3, 55, "printing")
+    tracking.on_pick(3, None, "printing")
+    assert macros.tool_spool_sets == [("T3", None)]
+    assert len(logs.lines) == 1
+
+
+def test_the_mounted_lane_tracks_the_spool_of_the_tool_fed_from_it(tmp_path):
+    # T2 is not in the print: its old spool 31 says nothing about E2, which T0 feeds from.
+    tracking, spoolman, macros, _logs = build_remapped_print(tmp_path)
+    tracking.on_primed({0: 104, 2: 31}, "E2", afc_present=True, state="printing")
+    assert spoolman.active_spool_calls == [104]
+    assert macros.tool_spool_sets == [("T2", None)]
+
+
+def test_a_map_change_tells_every_tool_the_spool_of_its_new_lane(tmp_path):
+    tracking, _spoolman, macros, _logs = build_remapped_print(tmp_path, print_state="standby")
+    tracking.on_primed({0: 94, 1: 24, 2: 104, 3: 55}, None, afc_present=True)
+    tracking.printer.print_stats.state = "printing"
+    tracking.on_map_changed()
+    assert sorted(macros.tool_spool_sets) == [
+        ("T0", 104), ("T1", 94), ("T2", None), ("T3", None), ("T5", 104),
+    ]
+    assert tracking.lane_spool(2) == 104  # the lanes keep their spools
+
+
+def test_a_tool_left_out_of_the_map_at_print_end_shows_no_spool(tmp_path):
+    # During the print T5 showed E2's spool; once the home map is back no lane feeds T5.
+    tracking, _spoolman, macros, _logs = build_remapped_print(tmp_path)
+    tracking.on_primed({0: 104, 1: 94, 5: 104}, None, afc_present=True, state="printing")
+    tracking.printer.print_stats.state = "complete"
+    tracking.on_map_changed()
+    assert sorted(macros.tool_spool_sets) == [
+        ("T0", 94), ("T1", None), ("T2", 104), ("T3", None), ("T5", None),
+    ]
+
+
+def test_a_restart_mid_print_lines_up_the_tools_sharing_a_lane(tmp_path):
+    # T0 and T5 both feed from E2 but name different spools: E2 takes T0's, and T5 follows it.
+    tracking, _spoolman, macros, _logs = build_remapped_print(tmp_path)
+    tracking.on_primed({0: 104, 5: 80}, None, afc_present=True, state="printing")
+    assert tracking.lane_spool(2) == 104
+    assert macros.tool_spool_sets == [("T5", 104)]
+
+
+def test_a_lane_cleared_after_the_print_started_keeps_the_active_spool_through_the_print(tmp_path):
+    # The print started after the last watcher event, so only the live state says it is running:
+    # the tools the print feeds from E2 are cleared now, the firmware clear waits for the print end.
+    tracking, spoolman, macros, _logs = build_remapped_print(tmp_path, print_state="standby")
+    slot = tracking.printer.lookup_object("print_task_config").print_task_config
+    slot["filament_vendor"][2] = "Flashforge"
+    slot["filament_type"][2] = "PLA"
+    tracking.on_primed({2: 104}, "E2", afc_present=True)
+    tracking.printer.print_stats.state = "printing"
+    tracking.set_lane_spool(2, None)
+    assert macros.tool_spool_sets == [("T0", None), ("T5", None)]
+    assert all(not cmd.startswith("SET_PRINT_FILAMENT_CONFIG") for cmd in macros.commands)
+    tracking.printer.reactor.now += 60.0
+    tracking.on_settle_tick()
+    assert spoolman.active_spool_calls == [104]
+    tracking.printer.print_stats.state = "complete"
+    tracking.on_print_left_active(None, True)
+    assert any(cmd.startswith("SET_PRINT_FILAMENT_CONFIG CONFIG_EXTRUDER=2")
+               and 'VENDOR="NONE"' in cmd for cmd in macros.commands)
+
+
+def test_a_tool_fed_by_no_lane_between_prints_is_cleared_at_priming():
+    tracking, _spoolman, macros, _logs = build_tracking()
+    tracking.on_primed({0: 94, 5: 80}, None, afc_present=True)
+    assert tracking.lane_spool(0) == 94
+    assert macros.tool_spool_sets == [("T5", None)]
+
+
+def test_a_lane_set_before_the_first_sample_keeps_its_spool(tmp_path):
+    # A tag bound mid print names E2's spool before the watcher's first sample; T0's value at that
+    # sample is older and must not replace it.
+    tracking, _spoolman, macros, _logs = build_remapped_print(tmp_path)
+    tracking.set_lane_spool(2, 104)
+    tracking.on_primed({0: 31}, None, afc_present=True, state="printing")
+    assert tracking.lane_spool(2) == 104
+    assert macros.tool_spool_sets == [("T0", 104), ("T5", 104), ("T0", 104)]
+
+
+def test_a_lane_cleared_before_the_first_sample_clears_its_tool():
+    tracking, _spoolman, macros, _logs = build_tracking()
+    tracking.set_lane_spool(1, None)
+    assert macros.tool_spool_sets == [("T1", None)]
+
+
+def test_afc_panel_pick_tells_every_tool_fed_from_the_lane(tmp_path):
+    tracking, _spoolman, macros, _logs = build_remapped_print(tmp_path)
+    tracking.on_primed({}, None, afc_present=True, state="printing")
+    tracking.on_afc_lane_pick(2, 80, "printing")
+    assert sorted(macros.tool_spool_sets) == [("T0", 80), ("T5", 80)]
+    assert tracking.helper.remembered == [(2, 80)]
+
+
+def test_a_write_held_for_a_spool_the_lane_no_longer_holds_is_dropped(tmp_path):
+    # A tag bound spool 104 to E2 mid print and its config write was held. Then T0, fed from E2,
+    # was picked as spool 80: at print end only spool 80's config may land on E2.
+    tracking, _spoolman, macros, _logs = build_remapped_print(tmp_path)
+    tracking.on_primed({}, None, afc_present=True, state="printing")
+    tracking.set_lane_spool(2, 104)
+    tracking.writer.apply_spool(2, SPOOL)
+    tracking.on_pick(0, 80, "printing")
+    tracking.printer.print_stats.state = "complete"
+    tracking.on_print_left_active(None, True)
+    filament_writes = [cmd for cmd in macros.commands if cmd.startswith("SET_PRINT_FILAMENT")]
+    assert len(filament_writes) == 1
+    assert filament_writes[0].startswith("SET_PRINT_FILAMENT_CONFIG CONFIG_EXTRUDER=2")
+    assert "Polymaker" in filament_writes[0]
+
+
+def test_a_spoolman_answer_for_a_spool_the_lane_no_longer_holds_is_dropped(tmp_path):
+    # The print-end write for spool 104 waits on Spoolman; meanwhile T2 is picked as spool 80 on
+    # the same lane. Only spool 80's config may land on E2.
+    tracking, _spoolman, macros, _logs = build_remapped_print(tmp_path)
+    spoolman = LateAnsweringSpoolman()
+    tracking.spoolman = spoolman
+    tracking.on_primed({}, None, afc_present=True, state="printing")
+    tracking.on_pick(0, 104, "printing")
+    tracking.printer.print_stats.state = "complete"
+    tracking.on_print_left_active(None, True)
+    tracking.on_pick(2, 80, "standby")
+    spoolman.answer_every_fetch()
+    filament_writes = [cmd for cmd in macros.commands if cmd.startswith("SET_PRINT_FILAMENT")]
+    assert len(filament_writes) == 1
+    assert filament_writes[0].startswith("SET_PRINT_FILAMENT_CONFIG CONFIG_EXTRUDER=2")
+    assert "Polymaker" in filament_writes[0]

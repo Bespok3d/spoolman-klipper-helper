@@ -1,9 +1,10 @@
 """SH_DUMP_SPOOLS rendering: an honest summary of what each lane effectively carries."""
 import json
 
+from .active_spool import lane_label
 from .afc import lane_filament_name
 from .filament_info import filament_info_to_string, is_untagged_filament
-from .u1_tools import EXTRUDERS_COUNT
+from .u1_tools import EXTRUDERS_COUNT, live_extruder_map
 
 
 class LaneReport:
@@ -11,7 +12,6 @@ class LaneReport:
         self.helper = helper
         self.printer = helper.printer
         self.logs = helper.logs
-        self.macros = helper.macros
         self.holders = helper.holders
 
     def dump(self, raw):
@@ -22,8 +22,9 @@ class LaneReport:
             )
             return
         self.logs.log("Dumping Spool Holders:")
+        extruder_map = live_extruder_map(self.printer)
         for channel in range(EXTRUDERS_COUNT):
-            self.logs.log(f"T{channel}: {self._lane_summary(channel)}")
+            self.logs.log(f"{lane_label(extruder_map, channel)}: {self._lane_summary(channel)}")
 
     # The spool a lane effectively carries: a real detected (tagged/resolved) spool wins;
     # otherwise a hand-assigned Spoolman spool_id; otherwise a loaded-but-unidentified spool is
@@ -38,7 +39,7 @@ class LaneReport:
         return "UNKNOWN (loaded, no tag)" if holder else "empty"
 
     def _manual_lane_summary(self, channel):
-        assigned = self.macros.get_spool_id_for_tool(channel)
+        assigned = self.helper.tracking.lane_spool(channel)
         if not assigned:
             return None
         resolved = self.holders.spools_by_id.get(assigned)
