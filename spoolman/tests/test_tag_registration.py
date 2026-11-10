@@ -220,14 +220,14 @@ def test_a_spool_asked_for_by_hand_is_created_with_the_config_option_off():
     assert "/api/v1/spool" in created_paths(webhooks)
 
 
-def apply_tag(spools, logs=None, filaments=()):
+def apply_tag(spools, logs=None, filaments=(), tag=TAG):
     printer = FakePrinter()
     webhooks = SpoolmanCreatesWebhooks(
         printer, {("/api/v1/spool", ""): spools, ("/api/v1/filament", ""): list(filaments)})
     printer.objects["webhooks"] = webhooks
     spoolman = Spoolman(printer, logs or RecordingLogs())
     applied = []
-    spoolman.apply_tag_to_spool(TAG, 104, applied.append)
+    spoolman.apply_tag_to_spool(tag, 104, applied.append)
     return applied, webhooks
 
 
@@ -311,3 +311,62 @@ def test_writing_a_tag_when_spoolman_is_silent_changes_nothing():
     assert applied == []
     assert [call for call in printer.objects["webhooks"].remote_calls
             if call[1].get("request_method", "GET") != "GET"] == []
+
+
+THREE_COLOUR_TAG = {
+    **TAG, "SKU": "", "ARGB_COLOR": 0xFF112233,
+    "COLOR_NUMS": 3, "RGB_1": 0x112233, "RGB_2": 0x445566, "RGB_3": 0x778899,
+}
+
+THREE_COLOUR_FIELDS = {
+    "multi_color_hexes": "112233,445566,778899", "multi_color_direction": "coaxial",
+}
+
+
+def test_every_colour_of_a_multi_colour_tag_is_written_to_its_filament():
+    assert card_details_payload(THREE_COLOUR_TAG) == {
+        "material": "PLA", "name": "Matte", "color_hex": None, **THREE_COLOUR_FIELDS,
+    }
+
+
+def test_a_new_filament_from_a_multi_colour_tag_carries_the_colour_list_alone():
+    payload = filament_payload(THREE_COLOUR_TAG, 3, {"diameter": 1.75, "density": 1.24})
+    assert payload == {
+        "material": "PLA", "name": "Matte", **THREE_COLOUR_FIELDS,
+        "diameter": 1.75, "density": 1.24, "vendor_id": 3,
+    }
+
+
+def test_a_multi_colour_tag_is_recognised_as_their_filament_of_the_same_colours():
+    theirs = filament(id=16, color_hex="", multi_color_hexes="112233,445566,778899",
+                      multi_color_direction="coaxial")
+    assert matching_filament(THREE_COLOUR_TAG, [theirs]) is theirs
+
+
+def test_a_multi_colour_tag_is_not_a_filament_of_its_first_colour_alone():
+    assert matching_filament(THREE_COLOUR_TAG, [filament(color_hex="112233")]) is None
+
+
+def test_a_multi_colour_tag_keeps_the_direction_they_chose_for_the_filament():
+    theirs = filament(id=12, color_hex="", multi_color_hexes="AABBCC,DDEEFF",
+                      multi_color_direction="longitudinal")
+    applied, webhooks = apply_tag([{"id": 104, "filament": {"id": 12}}],
+                                  filaments=[theirs], tag=THREE_COLOUR_TAG)
+    assert applied == [None]
+    assert webhooks.written[0] == ("PATCH", "/api/v1/filament/12", {
+        "material": "PLA", "name": "Matte", "color_hex": None,
+        "multi_color_hexes": "112233,445566,778899", "multi_color_direction": "longitudinal",
+    })
+
+
+def test_a_one_colour_tag_replaces_the_colour_list_of_the_filament_it_is_written_onto():
+    # Before, the old list stayed, and Spoolman kept showing the old colours over the tag's one.
+    theirs = filament(id=12, color_hex="", multi_color_hexes="AABBCC,DDEEFF",
+                      multi_color_direction="coaxial")
+    applied, webhooks = apply_tag([{"id": 104, "filament": {"id": 12}}], filaments=[theirs])
+    assert applied == [None]
+    assert webhooks.written[0] == ("PATCH", "/api/v1/filament/12", {
+        "material": "PLA", "name": "Matte", "color_hex": "1D6C6A",
+        "article_number": "EL-PLA-M-TEAL",
+        "multi_color_hexes": None, "multi_color_direction": None,
+    })

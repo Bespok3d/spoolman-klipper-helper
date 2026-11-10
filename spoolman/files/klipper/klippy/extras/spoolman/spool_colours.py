@@ -44,6 +44,12 @@ def colours_on_tag(tag_info):
     return [rgb_hex(rgb_value) for rgb_value in rgb_values if rgb_value is not None]
 
 
+# Empty for a one colour tag: Spoolman takes a colour list only from two colours up.
+def multi_colours_on_tag(tag_info):
+    colours = [colour for colour in colours_on_tag(tag_info) if colour]
+    return colours if len(colours) > SINGLE_COLOUR_COUNT else []
+
+
 def _tag_alpha(tag_info):
     alpha = tag_info.get("ALPHA")
     return alpha if isinstance(alpha, int) else OPAQUE_ALPHA_VALUE

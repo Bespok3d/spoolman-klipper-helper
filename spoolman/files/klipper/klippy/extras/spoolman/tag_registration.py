@@ -7,11 +7,21 @@ the same material: those are numbers they already stand behind. A material they 
 therefore registers nothing, and the console says which filament is missing.
 
 Everything else on the new records comes off the card and nowhere else: vendor, material, filament
-name, colour and article number. No weight, no temperature, no date, no invented SKU.
+name, colours and article number. No weight, no temperature, no date, no invented SKU.
 
 This module is pure. It reads what Spoolman already holds, builds the payloads, and touches nothing.
 """
 from .filament_info import filament_info_from_spoolman, rgb_hex
+from .spool_colours import (
+    SPOOLMAN_COLOUR_SEPARATOR,
+    colours_in_spoolman,
+    multi_colours_on_tag,
+)
+
+# Spoolman refuses a colour list without a direction, coaxial or longitudinal. A tag never says
+# which (its MULTI_MODE is undocumented), so a multi colour tag files as coaxial unless the
+# filament already carries a direction of their choosing.
+DEFAULT_MULTI_COLOR_DIRECTION = "coaxial"
 
 
 def _comparable(value):
@@ -56,13 +66,27 @@ def matching_filament(tag_info, filaments):
 
 def _describes_same_filament(tag_info, filament):
     described = filament_info_from_spoolman({"filament": filament})
-    colour = rgb_hex(tag_info.get("ARGB_COLOR"))
-    return bool(colour) and colour == rgb_hex(described.get("ARGB_COLOR")) and all((
+    return _same_colours(tag_info, filament) and all((
         _comparable(tag_info.get("MAIN_TYPE")),
         _same_text(tag_info.get("MAIN_TYPE"), described.get("MAIN_TYPE")),
         _same_text(tag_info.get("SUB_TYPE"), described.get("SUB_TYPE")),
         _same_text(tag_info.get("VENDOR"), described.get("VENDOR")),
     ))
+
+
+# A multi colour filament files its colours in the list and leaves color_hex empty, so a multi
+# colour tag is matched on the whole list, in order. A one colour tag keeps its own colour field.
+def _same_colours(tag_info, filament):
+    tag_multi_colours = multi_colours_on_tag(tag_info)
+    if tag_multi_colours:
+        return tag_multi_colours == colours_in_spoolman({"filament": filament})
+    colour = rgb_hex(tag_info.get("ARGB_COLOR"))
+    return bool(colour) and colour == rgb_hex(filament.get("color_hex") or "")
+
+
+def filament_with_id(filaments, filament_id):
+    owned = [filament for filament in filaments if filament.get("id") == filament_id]
+    return owned[0] if owned else {}
 
 
 # The one place a number the card does not carry may come from: filaments of this same material
@@ -106,13 +130,31 @@ def vendor_payload(tag_info):
 
 # The fields the card itself holds, and the only ones written to a filament record. A field the
 # card left blank is left out rather than written as an empty string over something they wrote.
-def card_details_payload(tag_info):
-    return _without_blanks({
+# current_filament is the record being written over, empty for a new one.
+def card_details_payload(tag_info, current_filament=None):
+    card_details = _without_blanks({
         "material": str(tag_info.get("MAIN_TYPE") or "").strip(),
         "name": str(tag_info.get("SUB_TYPE") or "").strip(),
         "color_hex": rgb_hex(tag_info.get("ARGB_COLOR")),
         "article_number": str(tag_info.get("SKU") or "").strip(),
     })
+    return {**card_details, **_colour_list_fields(tag_info, current_filament or {})}
+
+
+# Spoolman refuses a filament holding both color_hex and a colour list, and an update leaves
+# alone a field it is not sent, so whichever of the two the tag does not fill is cleared outright.
+def _colour_list_fields(tag_info, current_filament):
+    colours = multi_colours_on_tag(tag_info)
+    if colours:
+        direction = current_filament.get("multi_color_direction") or DEFAULT_MULTI_COLOR_DIRECTION
+        return {
+            "color_hex": None,
+            "multi_color_hexes": SPOOLMAN_COLOUR_SEPARATOR.join(colours),
+            "multi_color_direction": direction,
+        }
+    if rgb_hex(tag_info.get("ARGB_COLOR")) and current_filament.get("multi_color_hexes"):
+        return {"multi_color_hexes": None, "multi_color_direction": None}
+    return {}
 
 
 def filament_payload(tag_info, vendor_id, dimensions):

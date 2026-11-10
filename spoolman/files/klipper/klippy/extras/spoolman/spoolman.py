@@ -14,6 +14,7 @@ from .tag_registration import (
     card_details_payload,
     dimensions_of_material,
     filament_payload,
+    filament_with_id,
     filaments_with_exact_article_number,
     matching_filament,
     spool_payload,
@@ -263,11 +264,15 @@ class Spoolman:
             if article_number_on_another_filament(filament_info, filaments or [], filament_id):
                 on_applied(REGISTER_ARTICLE_NUMBER_TAKEN)
                 return
-            self._patch_tag_onto_filament(filament_info, spool_id, filament_id, on_applied)
+            current_filament = filament_with_id(filaments or [], filament_id)
+            self._patch_tag_onto_filament(
+                filament_info, spool_id, filament_id, current_filament, on_applied)
 
         SpoolmanRequest(self.webhooks, self.logs, on_filaments).fetch("/api/v1/filament", "")
 
-    def _patch_tag_onto_filament(self, filament_info, spool_id, filament_id, on_applied):
+    def _patch_tag_onto_filament(
+        self, filament_info, spool_id, filament_id, current_filament, on_applied
+    ):
         def on_patched(error, payload):
             if error:
                 on_applied(REGISTER_REFUSED)
@@ -277,7 +282,7 @@ class Spoolman:
 
         SpoolmanRequest(self.webhooks, self.logs, on_patched).fetch(
             f"/api/v1/filament/{filament_id}", "", method="PATCH",
-            body=card_details_payload(filament_info))
+            body=card_details_payload(filament_info, current_filament))
 
     def patch_location(self, spool_id, location):
         def on_result(error, payload):
