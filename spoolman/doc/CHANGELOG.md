@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.1.41
+
+- Fix: a spool with more colours in Spoolman than on its tag now keeps those colours on the
+  screen and in the G-code preview during a print. Before, the printer showed the tag's single
+  colour until the print ended. With U1 Base installed, a spool found by its tag during a print
+  (the print-start re-read or `DETECT_SPOOLS`) is now written at once, keeping the print's
+  pressure advance; a pick or clear made by hand still waits for the print to end. Without U1
+  Base it all still waits.
+
 ## 0.1.40
 
 - Fix: a spool picked in the AFC panel on a lane with a tag now reaches Spoolman too. Before, the

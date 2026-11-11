@@ -42,6 +42,8 @@ CONFIG_FIELD_BY_ARG = {
 # A multi colour write names its colours in COLORS instead of FILAMENT_COLOR_RGBA.
 FILAMENT_FIELD_ARGS = (*CONFIG_FIELD_BY_ARG, "COLORS")
 QUOTED_ARGS = ("VENDOR", "FILAMENT_TYPE", "FILAMENT_SUBTYPE")
+# The name this plugin holds the pressure advance reset door under; u1-base keeps a set of owners.
+PRESSURE_ADVANCE_RESET_OWNER = "spoolman"
 # Spoolman has no sub-type field of its own; the firmware requires one next to FILAMENT_TYPE
 # ("incomplete parameters"), and Orca matches on it. Three sources can carry it, tried in the
 # order the subtype_sources option lists, first non-empty one wins: a "subtype" extra field the
@@ -383,9 +385,11 @@ class PrintTaskWriter:
             return desired
         return filament_config_args_forcing_an_official_channel(desired)
 
+    def _print_task(self):
+        return self.printer.lookup_object("print_task_config", None)
+
     def _live_task_config(self):
-        task = self.printer.lookup_object("print_task_config", None)
-        config = getattr(task, "print_task_config", None)
+        config = getattr(self._print_task(), "print_task_config", None)
         return config if isinstance(config, dict) else {}
 
     # tag_names_this_spool says the tag on the lane was resolved to the very spool being written,
@@ -403,26 +407,55 @@ class PrintTaskWriter:
         )
 
     # The firmware runs FLOW_RESET_K on every filament config write it accepts, which resets
-    # the live extruder's pressure advance. A write that lands while the printer is printing
-    # therefore changes how the running print extrudes, so it waits: the last write per extruder
-    # is held and sent once the print is over. The lane name is never held, because the AFC panel
-    # label touches nothing the print is doing.
+    # the live extruder's pressure advance, and a print-start tag read files the tag's fewer
+    # colours on the lane. Mid-print the write still goes out at once when u1-base opens its
+    # door to hold off that reset, so the screen and the preview show the spool's colours for
+    # the whole print. Without the door the write would change how the running print extrudes,
+    # so it waits: the last write per extruder is held and sent once the print is over. The lane
+    # name is never held, because the AFC panel label touches nothing the print is doing.
     def _send_or_hold_filament_config(
         self, physical_extruder, desired_args, failure_problem, spool_id=None
     ):
-        if print_state(self.printer) in ACTIVE_PRINT_STATES:
-            self.writes_held_during_print[physical_extruder] = HeldWrite(
-                desired_args, failure_problem, spool_id,
-            )
-            self.logs.verbose(
-                f"Holding filament config for extruder {physical_extruder} until the print ends"
-            )
+        if print_state(self.printer) not in ACTIVE_PRINT_STATES:
+            self._send_filament_config(physical_extruder, desired_args, failure_problem)
             return
+        task = self._task_with_pressure_advance_door()
+        if task is None:
+            self._hold_filament_config(physical_extruder, desired_args, failure_problem, spool_id)
+            return
+        self._send_keeping_pressure_advance(task, physical_extruder, desired_args, failure_problem)
+
+    def _task_with_pressure_advance_door(self):
+        task = self._print_task()
+        return task if hasattr(task, "suppress_pressure_advance_reset") else None
+
+    def _send_filament_config(self, physical_extruder, desired_args, failure_problem):
         self.macros.run(
             set_print_filament_config_gcode(
                 self._firmware_write_args(physical_extruder, desired_args)
             ),
             failure_problem,
+        )
+
+    def _send_keeping_pressure_advance(
+        self, task, physical_extruder, desired_args, failure_problem
+    ):
+        self.logs.verbose(
+            f"Writing filament config for extruder {physical_extruder} mid-print, "
+            "pressure advance kept"
+        )
+        task.suppress_pressure_advance_reset(PRESSURE_ADVANCE_RESET_OWNER)
+        try:
+            self._send_filament_config(physical_extruder, desired_args, failure_problem)
+        finally:
+            task.resume_pressure_advance_reset(PRESSURE_ADVANCE_RESET_OWNER)
+
+    def _hold_filament_config(self, physical_extruder, desired_args, failure_problem, spool_id):
+        self.writes_held_during_print[physical_extruder] = HeldWrite(
+            desired_args, failure_problem, spool_id,
+        )
+        self.logs.verbose(
+            f"Holding filament config for extruder {physical_extruder} until the print ends"
         )
 
     # Called when the print leaves printing/paused, by the same coordinator that drains its own

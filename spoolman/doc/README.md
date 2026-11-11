@@ -192,7 +192,7 @@ Each line is: **what you have** then how the name behaves, then how color/materi
   **Spoolman pick overrides a tagged lane** is on, in which case the Spoolman record is written
   there too (that is what Snapmaker Orca reads). With it off, the Spoolman record is still
   written when that spool has more colours in Spoolman than the tag holds, after each read of
-  the tag, and only while no print is running.
+  the tag. During a print that write goes out at once when U1 Base is installed (see below).
 - **Untagged, set on the screen:** no name (there is no spool); color/material come from the screen.
 - **Untagged, picked in Spoolman:** name shows live from the pick; the bridge writes color/material
   so the screen and AFC agree, and makes the picked spool the active/tracked spool. `DETECT_SPOOLS`
@@ -201,9 +201,12 @@ Each line is: **what you have** then how the name behaves, then how color/materi
   the firmware re-read blanked them.
 - **Untagged, loaded but not picked:** shown as `UNKNOWN` (present but unidentified) rather than
   empty, in the helper's logs and `DUMP_SPOOLS`.
-- **Picked or identified mid-print:** name and the active spool update live; only the firmware
-  color/material write is deferred to when the print leaves printing/paused. This holds however the
-  spool was identified, by hand or by tag.
+- **Picked mid-print:** name and the active spool update live; the firmware color/material write
+  for the pick is deferred to when the print leaves printing/paused.
+- **Identified by tag mid-print** (a `DETECT_SPOOLS` re-read too): name and the active spool update live.
+  With U1 Base installed the color/material write goes out at once too, so the screen and the
+  G-code preview keep the spool's colours for the whole print. Without U1 Base it is deferred
+  like a pick.
 - **Spool cleared for a tool:** name clears, and the lane's color/material are reset to empty on the
   screen and AFC. `CLEAR_ALL_SPOOLS` clears every lane, including RFID-tagged ones.
 - **Untagged filament pulled out:** a manually picked spool whose filament you physically remove is
@@ -222,12 +225,14 @@ Each line is: **what you have** then how the name behaves, then how color/materi
   that spool is written with `FORCE=1` all the same.
 - It acts only on the 4 physical lanes (the tools that map to physical extruders 0 to 3 in the
   U1's virtual-tool table). A virtual tool with no physical mapping is skipped.
-- Any spool change while a print is running or paused is **deferred**: the name updates live, and
-  the color/material land the moment the print leaves printing/paused. This is by design: the
-  printer resets its pressure advance every time it accepts that write, so a write landing
-  mid-print would change how the running print extrudes (and the firmware can reject it outright).
-  Only the last change per lane is sent when the print ends, and it is dropped if the printer
-  already carries it.
+- The printer resets its pressure advance every time it accepts a color/material write, so a write
+  landing mid-print would change how the running print extrudes. With U1 Base installed, the
+  helper holds that reset off for its own write, so a tag read mid-print (the printer re-reads
+  the tags when a print starts) is written at once and the print keeps its pressure advance. A
+  pick or a clear made by hand still waits for the print to end. Without
+  U1 Base, any spool change while a print is running or paused is **deferred**: the name updates
+  live, and the color/material land the moment the print leaves printing/paused. Only the last
+  change per lane is sent when the print ends, and it is dropped if the printer already carries it.
 - After installing or updating, Moonraker restarts and the AFC frontends' service worker may
   serve stale JavaScript. If a panel looks wrong, hard-refresh the browser.
 

@@ -124,6 +124,32 @@ class FakePrintTaskConfig:
         self.print_task_config = config
 
 
+# The door u1-base opens in the firmware: the owners currently holding off the pressure advance
+# reset that the firmware runs after every filament config write it accepts.
+class FakePrintTaskConfigWithResetDoor(FakePrintTaskConfig):
+    def __init__(self, config):
+        super().__init__(config)
+        self.reset_suppressed_by = set()
+
+    def suppress_pressure_advance_reset(self, owner):
+        self.reset_suppressed_by.add(owner)
+
+    def resume_pressure_advance_reset(self, owner):
+        self.reset_suppressed_by.discard(owner)
+
+
+# Records, next to each command, who held off the pressure advance reset while it ran.
+class ResetDoorRecordingMacros(RecordingMacros):
+    def __init__(self, task):
+        super().__init__()
+        self.task = task
+        self.reset_suppressed_by_per_command = []
+
+    def run(self, command, error_msg):
+        super().run(command, error_msg)
+        self.reset_suppressed_by_per_command.append(sorted(self.task.reset_suppressed_by))
+
+
 class FakePrintStats:
     def __init__(self, state):
         self.state = state
@@ -166,6 +192,22 @@ def build_writer(task_config, spoolman_overrides_tag=False, print_state=""):
         spoolman_overrides_tag=spoolman_overrides_tag,
     )
     return writer, macros
+
+
+def build_writer_with_reset_door(task_config, print_state=""):
+    printer = FakePrinter(task_config, print_state)
+    printer.task = FakePrintTaskConfigWithResetDoor(task_config)
+    macros = ResetDoorRecordingMacros(printer.task)
+    writer = PrintTaskWriter(printer, RecordingLogs(), macros)
+    return writer, macros
+
+
+def config_writes_with_reset_holders(macros):
+    sent = zip(macros.commands, macros.reset_suppressed_by_per_command)
+    return [
+        (command, holders) for command, holders in sent
+        if command.startswith("SET_PRINT_FILAMENT_CONFIG")
+    ]
 
 
 def end_the_print(writer):
@@ -732,3 +774,37 @@ def test_a_held_colour_write_never_lands_over_a_tag_read_during_the_print():
     end_the_print(writer)
     writer.release_writes_held_during_print(tag_naming_spool_90_on_every_lane)
     assert config_writes_sent(macros) == []
+
+
+def test_the_extra_colours_land_mid_print_when_the_reset_can_be_held_off():
+    # Before, they waited for the print to end, so the screen and the G-code preview showed the
+    # tag's one colour for the whole print.
+    writer, macros = build_writer_with_reset_door(one_colour_tag_lane(), print_state="printing")
+    writer.apply_spool(3, MULTI_COLOUR_SPOOL, TAG_ONE_COLOUR_ON_SPOOL_89)
+    assert config_writes_with_reset_holders(macros) == [
+        (FORCED_MULTI_COLOUR_GCODE, ["spoolman"]),
+    ]
+    assert writer.printer.task.reset_suppressed_by == set()
+    assert writer.writes_held_during_print == {}
+
+
+def test_a_spool_written_while_paused_goes_out_at_once_when_the_reset_can_be_held_off():
+    writer, macros = build_writer_with_reset_door(empty_task_config(), print_state="paused")
+    writer.apply_spool(3, SPOOL)
+    assert config_writes_with_reset_holders(macros) == [(EXPECTED_GCODE, ["spoolman"])]
+
+
+def test_another_plugin_holding_off_the_reset_keeps_it_held_off():
+    writer, macros = build_writer_with_reset_door(empty_task_config(), print_state="printing")
+    writer.printer.task.suppress_pressure_advance_reset("rfid-ntag")
+    writer.apply_spool(3, SPOOL)
+    assert config_writes_with_reset_holders(macros) == [
+        (EXPECTED_GCODE, ["rfid-ntag", "spoolman"]),
+    ]
+    assert writer.printer.task.reset_suppressed_by == {"rfid-ntag"}
+
+
+def test_outside_a_print_the_write_leaves_the_reset_alone():
+    writer, macros = build_writer_with_reset_door(empty_task_config())
+    writer.apply_spool(3, SPOOL)
+    assert config_writes_with_reset_holders(macros) == [(EXPECTED_GCODE, [])]
