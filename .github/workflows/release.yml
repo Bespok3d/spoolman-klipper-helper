@@ -42,13 +42,13 @@ jobs:
           publish: ${{ github.event_name == 'push' || inputs.publish }}
           prepared-receipt: ${{ inputs.prepared-receipt }}
           require-signature: 'true'
-          register-commit: df4eec856264bebffaa37d93ab1c51363fd6ef92
+          register-commit: 64c6058ae74e81a1eb3c29248369918a7dbec647
           unit: repo
           signing-key: ${{ secrets.REGISTRY_SIGNING_KEY }}
           bake: 'false'
           atom-repo: ${{ github.repository }}
           provider-indexes: https://raw.githubusercontent.com/Bespok3d/main-index/main/index.json
-      - uses: Bespok3d/main-index/.github/actions/register-atoms@df4eec856264bebffaa37d93ab1c51363fd6ef92
+      - uses: Bespok3d/main-index/.github/actions/register-atoms@64c6058ae74e81a1eb3c29248369918a7dbec647
         if: ${{ steps.release.outputs.publish == 'true' }}
         with:
           atoms-dir: dist/registration
