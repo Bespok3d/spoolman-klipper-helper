@@ -1396,3 +1396,100 @@ def test_a_resolved_lane_logs_no_tag_evidence():
     helper.holders.spool_holders[0] = {**TAGGED, "SPOOL_ID": None}
     resolution.apply_spool_for_extruder(0)
     assert not any("Unresolved tag" in line for line in helper.logs.lines)
+
+
+class LateSpoolman(RecordingSpoolman):
+    """A Spoolman whose answers wait until the test lets them through, like the real HTTP one."""
+
+    def __init__(self, **spoolman_traits):
+        super().__init__(**spoolman_traits)
+        self.waiting_answers = []
+
+    def resolve_spool(self, info, callback):
+        self.resolved_infos.append(info)
+        self.waiting_answers.append(lambda: callback(self.resolve_result, False))
+
+    def fetch_spool(self, spool_id, on_spool):
+        self.fetched_spool_ids.append(spool_id)
+        self.waiting_answers.append(lambda: on_spool(SPOOLMAN_SPOOL))
+
+    def answer_all(self):
+        answers, self.waiting_answers = self.waiting_answers, []
+        for answer in answers:
+            answer()
+
+
+def build_late_resolution():
+    resolution, helper, afc_pushes = build_resolution()
+    helper.spoolman = resolution.spoolman = LateSpoolman()
+    return resolution, helper, afc_pushes
+
+
+def test_a_spool_answer_that_lands_after_the_lane_was_cleared_writes_nothing():
+    # Live on lane 4: the unload re-sent the old tag, the bind asked Spoolman for the spool, the
+    # clear came first, and the answer then wrote the old spool back onto the empty lane.
+    resolution, helper, _afc_pushes = build_late_resolution()
+    helper.holders.spool_holders[3] = dict(TAGGED)
+    resolution.apply_spool_for_extruder(3)
+    helper.spoolman.answer_all()
+    helper.holders.clear_channel(3)
+    helper.spoolman.answer_all()
+    assert helper.writer.applied_spools == []
+
+
+def test_a_tag_answer_that_lands_after_the_lane_was_cleared_binds_nothing():
+    resolution, helper, afc_pushes = build_late_resolution()
+    helper.holders.spool_holders[3] = dict(TAGGED)
+    resolution.apply_spool_for_extruder(3)
+    helper.holders.clear_channel(3)
+    helper.spoolman.answer_all()
+    assert helper.macros.tool_spool_sets == [("T3", None)]
+    assert afc_pushes == [(3, None)]
+    assert helper.spoolman.fetched_spool_ids == []
+
+
+def test_a_tag_answer_for_a_tag_that_was_replaced_binds_nothing():
+    resolution, helper, _afc_pushes = build_late_resolution()
+    helper.holders.spool_holders[3] = dict(TAGGED)
+    resolution.apply_spool_for_extruder(3)
+    helper.holders.spool_holders[3] = {**TAGGED, "SPOOL_ID": 205}
+    helper.spoolman.answer_all()
+    assert helper.macros.tool_spool_sets == []
+
+
+def test_a_hand_pick_answer_that_lands_after_the_lane_was_cleared_writes_nothing():
+    resolution, helper, _afc_pushes = build_late_resolution()
+    resolution.reapply_preserved_pick(1, 55)
+    helper.holders.clear_channel(1)
+    helper.spoolman.answer_all()
+    assert helper.writer.applied_spools == []
+
+
+def test_a_late_spool_answer_on_a_lane_nobody_cleared_is_still_written():
+    resolution, helper, _afc_pushes = build_late_resolution()
+    helper.holders.spool_holders[3] = dict(TAGGED)
+    resolution.apply_spool_for_extruder(3)
+    helper.spoolman.answer_all()
+    helper.spoolman.answer_all()
+    assert helper.writer.applied_spools == [(3, SPOOLMAN_SPOOL)]
+
+
+def test_a_spool_answer_that_lands_after_the_lane_reported_empty_writes_nothing():
+    resolution, helper, _afc_pushes = build_late_resolution()
+    helper.holders.lane_has_filament = lambda channel: False
+    helper.holders.spool_holders[3] = dict(TAGGED)
+    resolution.apply_spool_for_extruder(3)
+    helper.spoolman.answer_all()
+    helper.holders.store_channel_report(3, None)
+    helper.spoolman.answer_all()
+    assert helper.writer.applied_spools == []
+
+
+def test_a_spool_answer_for_a_tag_that_was_replaced_writes_nothing():
+    resolution, helper, _afc_pushes = build_late_resolution()
+    helper.holders.spool_holders[3] = dict(TAGGED)
+    resolution.apply_spool_for_extruder(3)
+    helper.spoolman.answer_all()
+    helper.holders.store_channel_report(3, {**TAGGED, "SPOOL_ID": 205})
+    helper.spoolman.answer_all()
+    assert helper.writer.applied_spools == []

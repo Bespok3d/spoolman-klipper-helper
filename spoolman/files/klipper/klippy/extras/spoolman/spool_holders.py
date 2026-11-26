@@ -25,6 +25,9 @@ class SpoolHolders:
         self.lane_has_filament = lane_has_filament
         self.spool_holders = [None] * EXTRUDERS_COUNT
         self.spools_by_id = {}
+        # Spoolman answers late. A lane that lost its spool while the answer was on its way bumps
+        # this count, so the answer can see it is about a spool that is no longer there.
+        self.lane_drops = [0] * EXTRUDERS_COUNT
 
     def store_channel_report(self, channel, filament_info):
         """Store a channel's filament report; True when a tagged spool needs resolving."""
@@ -36,6 +39,7 @@ class SpoolHolders:
             self._note_untagged_lane(channel, filament_info)
             return False
         self.spool_holders[channel] = filament_info
+        self.lane_drops[channel] += 1
         return True
 
     # An untagged report is a "loaded but unidentified" spool only when filament is actually
@@ -47,6 +51,7 @@ class SpoolHolders:
             self.logs.log(f"Tool T{channel} loaded with UNKNOWN filament (unassigned, no tag)")
         else:
             self.spool_holders[channel] = None
+            self.lane_drops[channel] += 1
             self.logs.verbose(f"Tool T{channel} is empty")
 
     def clear_channel(self, channel, force=False):
@@ -59,6 +64,7 @@ class SpoolHolders:
             self.macros.clear_print_task_config(channel)
         self._drop_cached_spool(channel)
         self.spool_holders[channel] = None
+        self.lane_drops[channel] += 1
 
     def _drop_cached_spool(self, channel):
         holder = self.spool_holders[channel]
@@ -72,6 +78,7 @@ class SpoolHolders:
     def forget_tag(self, channel):
         if 0 <= channel < EXTRUDERS_COUNT:
             self.spool_holders[channel] = None
+            self.lane_drops[channel] += 1
 
     def tag_on_lane(self, channel):
         holder = self.spool_holders[channel] if 0 <= channel < EXTRUDERS_COUNT else None

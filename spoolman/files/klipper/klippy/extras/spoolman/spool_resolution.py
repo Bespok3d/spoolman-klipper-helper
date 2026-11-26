@@ -61,6 +61,8 @@ class SpoolResolution:
         )
 
         def on_resolve_spool(resolved, spoolman_unanswered, spool=spool):
+            if self._tag_left_the_lane(extruder, spool):
+                return
             spool_id = (
                 coerce_spool_id(spool.get("SPOOL_ID")) or spool_id_of_resolution(resolved)
             )
@@ -164,7 +166,17 @@ class SpoolResolution:
         spool["SPOOL_ID"] = spool_id
         self._bind_resolved_spool(channel, spool, spool_id, new_spool)
 
+    # Every bind comes back from Spoolman after a wait. A tag that was pulled, or replaced by
+    # another, while the answer was on its way must not put its spool back on the lane.
+    def _tag_left_the_lane(self, extruder, tag):
+        if self.holders.spool_holders[extruder] is tag:
+            return False
+        self.logs.verbose(f"Lane {extruder} changed while Spoolman answered, answer dropped")
+        return True
+
     def _bind_resolved_spool(self, extruder, spool, spool_id, new_spool=None):
+        if self._tag_left_the_lane(extruder, spool):
+            return
         self.holders.spools_by_id[spool_id] = spool
         self.logs.verbose(f"Got spool_id: {spool_id}")
         tool = f"T{extruder}"
@@ -198,11 +210,17 @@ class SpoolResolution:
         ):
             return
 
+        drops_when_asked = self.holders.lane_drops[extruder]
+
         def on_spool(spoolman_spool, target_extruder=extruder):
-            if spoolman_spool:
-                self.writer.apply_spool(
-                    target_extruder, spoolman_spool, self.holders.tag_on_lane(target_extruder)
-                )
+            if not spoolman_spool:
+                return
+            if self.holders.lane_drops[target_extruder] != drops_when_asked:
+                self.logs.verbose(f"Lane {target_extruder} changed, not writing {spool_id}")
+                return
+            self.writer.apply_spool(
+                target_extruder, spoolman_spool, self.holders.tag_on_lane(target_extruder)
+            )
 
         self.spoolman.fetch_spool(spool_id, on_spool)
 

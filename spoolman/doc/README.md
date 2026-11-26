@@ -108,7 +108,7 @@ additive and de-duplicated, and a spool's other fields are preserved. Re-randomi
   tied to it, so it is one spool whichever way round you load it (needs `register_from_tag`, on by
   default). Any other tag may be the other side of a spool you already have, so no spool is made:
   the console says so, and you link it with `SH_BIND_CARD_UID` or add the spool by hand. The same
-  goes for a Bambu tag while one of those spools was linked by only one of its tags (before 0.1.39).
+  goes for a Bambu tag while one of those spools was linked by only one of its tags (before 0.1.40).
 - **Auto-bind** (off by default): turn on **Auto-bind tag UID on SKU match** and the first time a
   spool with no tag yet is resolved by SKU, the current tag UID is written onto it, so the next tap
   is a direct UID match. A spool found by one tag also gets any of that tag's UIDs it is missing,

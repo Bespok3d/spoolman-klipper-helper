@@ -1,16 +1,10 @@
 # Changelog
 
-## 0.1.41
-
-- Fix: a spool with more colours in Spoolman than on its tag now keeps those colours on the
-  screen and in the G-code preview during a print. Before, the printer showed the tag's single
-  colour until the print ended. With U1 Base installed, a spool found by its tag during a print
-  (the print-start re-read or `DETECT_SPOOLS`) is now written at once, keeping the print's
-  pressure advance; a pick or clear made by hand still waits for the print to end. Without U1
-  Base it all still waits.
-
 ## 0.1.40
 
+- Fix: after you unload a tagged spool and load one with no tag, the lane no longer goes back to
+  the old spool. Before, a late answer from Spoolman could write the old spool onto the cleared
+  lane, and the printer then kept it, so the new spool never showed up.
 - Fix: a spool picked in the AFC panel on a lane with a tag now reaches Spoolman too. Before, the
   pick was ignored there, so the AFC panel and the Spoolman widget showed different spools.
 - If the loaded spools cannot be read at startup, the console now warns and says what to do: run
@@ -24,9 +18,12 @@
 - Fix: a filament whose only colour sits in Spoolman's colour list, with no single colour set,
   now reaches the printer with that colour instead of none.
 - Fix: a tagged spool with more colours in Spoolman than on its tag now shows them all on the
-  screen even with "Spoolman pick overrides a tagged lane" off. The lane then takes the brand,
-  material and sub-type from Spoolman too. The printer goes back to the tag's colours each time it
-  reads the tag, and the helper puts Spoolman's back once no print is running.
+  screen and in the G-code preview, even with "Spoolman pick overrides a tagged lane" off. The lane
+  then takes the brand, material and sub-type from Spoolman too. The printer goes back to the
+  tag's colours each time it reads the tag, and the helper puts Spoolman's back. With U1 Base
+  installed, a spool found by its tag during a print (the print-start re-read or `DETECT_SPOOLS`)
+  is written at once, keeping the print's pressure advance; a pick or clear made by hand waits for
+  the print to end. Without U1 Base it all waits for the print to end.
 - Fix: a spool made or updated from a multi colour tag now keeps all the tag's colours in
   Spoolman. Before, only the first colour was saved. Spoolman needs a colour direction for these,
   and the tag does not say which, so a new one is saved as coaxial; a direction you already set
